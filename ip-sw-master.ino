@@ -391,6 +391,11 @@ void setup() {
 
 
     #if defined(LCD)
+      lcd.setCursor(1, 0);
+      lcd.print(F("IP SWITCH by"));
+      lcd.setCursor(1, 1);
+      lcd.print(F("RemoteQTH.com"));
+      delay(1000);
       lcd.clear();
       lcd.setCursor(1, 0);
       lcd.print(F("Net-ID: "));
@@ -489,6 +494,7 @@ void InterruptON(int ptt, int enc){
 //---------------------------------------------------------------------------------------------------------
 
 void EncoderInterrupt(){
+  InterruptON(1,0); // ptt, enc
   if(PTT==false){
     rxShiftInButton[1]=0;
     rxShiftInButton[2]=0;
@@ -522,6 +528,7 @@ void EncoderInterrupt(){
     #endif
   }
   GetNetIdTimer[0]=millis();
+  InterruptON(1,1); // ptt, enc
 }
 //-------------------------------------------------------------------------------------------------------
 
