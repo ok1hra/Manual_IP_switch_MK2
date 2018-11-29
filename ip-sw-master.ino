@@ -1,8 +1,12 @@
 #include <Arduino.h>
 
-/*
+/* COMPILE FOR
+  --------------------
+  Board: Arduino NANO
+  Processor: ATMEGA328P (Old Booatloader)
+  --------------------
 
-  Band decoder MK2 with TRX control output for Arduino rev.0.4
+  Manual_IP_switch_MK2 for Arduino rev.0.2
 -----------------------------------------------------------
   https://remoteqth.com/wiki/index.php?page=Band+decoder+MK2
   2018-05 by OK1HRA
@@ -25,40 +29,23 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 Features:
-Support inputs
-  * PTT detector - if PTT on, outputs not change
-  * SERIAL terminal (ASCII)
-  * ICOM CI-V
-  * KENWOOD - CAT
-  * YAESU BCD
-  * ICOM ACC voltage
-  * YAESU CAT - TRX since 2008 ascii format
-  * YAESU CAT old binary format (tested on FT-817)
-  * IP relay with automatic pair by rotary encoder ID https://remoteqth.com/wiki/index.php?page=IP+Switch+with+ESP32-GATEWAY
-
-Outputs
-  * 14 local relay
-  * 14 remote relay
-  * Yaesu BCD
-  * Serial echo
-  * Icom CIV
-  * Kenwood CAT
-  * YAESU CAT - TRX since 2008 ascii format
-  * IP relay with automatic pair by rotary encoder ID
-
-  Major changes
-  -------------
-  - LCD support
-  - Icom with request mode
-  - PTT input block changes during transmit
-  - own board with all smd parts including arduino nano module
-  - without relays, only control driver outputs
-  - optional ethernet module
+  * control IP relay https://remoteqth.com/wiki/index.php?page=IP+Switch+with+ESP32-GATEWAY
+  * low latency
+  * 8 buttons ON/OFF and up to 16 encoder switch (one from)
+  * automatic nework pair by ID
+  * inhibit by PTT
+  * ethernet plug detect with auto reinitialization
 
   Changelog
   ---------
+  2018-11 rebuild ethernet and some bug fix
   2018-06 support IP relay
   2018-05 mk2 initial release
+
+  ToDo
+  ----
+  - select ID by band decoder
+  - encoder show ANT fullname
 
 */
 //=====[ Inputs ]=============================================================================================
@@ -82,22 +69,29 @@ Outputs
 
 //=====[ Hardware ]=============================================================================================
 
+
+bool EnableEthernet = 1;
+bool EnableDHCP     = 1;
+
+
 int EncoderCount = 0;
 const int SERIAL_BAUDRATE = 115200;
 // #define SERIAL_debug
 #define LCD                   // Uncoment to Enable I2C LCD
 const int NumberOfEncoderOutputs = 16;
 long GetNetIdTimer[2]{0,2000};
-long ButtDebounceTimer[2]{0,500};
+long ButtDebounceTimer[2]{0,200};
+long EncEndTimer[2]{0,1000};
+int EncEndStatus = 0;
+const int ButtonMapping[8]={3,2,1,0,7,6,5,4}; // 1-8
 
-
-
-
-#define LcdI2Caddress  0x3f   // 0x27 0x3F - may be find with I2C scanner https://playground.arduino.cc/Main/I2cScanner
+#define LcdI2Caddress  0x27   // 0x27 0x3F - may be find with I2C scanner https://playground.arduino.cc/Main/I2cScanner
 #define EthModule             // enable Ethernet module if installed
 #define __USE_DHCP__          // enable DHCP
 byte BOARD_ID = 0x04;         // NetID [hex] MUST BE UNIQUE IN NETWORK - replace by P6 board encoder
 // #define BcdToIP               // control IP relay in BCD format
+bool EthLinkStatus = 0;
+long EthLinkStatusTimer[2]{1500,1000};
 
 //=====[ Settings ]===========================================================================================
 
@@ -206,13 +200,18 @@ IN    ) Band 7 --> */ { 0,  0,  0,  0,  0,  0,  1,  0,    0,  0,  0,  0,  0,  0,
   };
   // byte LockChar[8] = {0b00100, 0b01010, 0b01010, 0b11111, 0b11011, 0b11011, 0b11111, 0b00000};
   uint8_t LockChar[8] = {0x4,0xa,0xa,0x1f,0x1b,0x1b,0x1f,0x0};
+  // byte EthChar[8] = {0b00000, 0b00000, 0b11111, 0b10001, 0b10001, 0b11011, 0b11111, 0b00000};
+  uint8_t EthChar[8] = {0x0,0x0,0x1f,0x11,0x11,0x1b,0x1f,0x0};
+
   bool LcdNeedRefresh = false;
 #endif
 
 #if defined(EthModule)
+  #include <Ethernet.h>
+  #include <EthernetUdp.h>
+  // #include <Ethernet2.h>
+  // #include <EthernetUdp2.h>
   //  #include <util.h>
-  #include <Ethernet2.h>
-  #include <EthernetUdp2.h>
   // #include <Dhcp.h>
   // #include <EthernetServer.h>
   #include <SPI.h>
@@ -268,7 +267,7 @@ const int PttOffPin = 6;          // PTT out OFF switch
 const int ShiftOutDataPin = 7;    // DATA
 const int ShiftOutLatchPin = 8;   // LATCH
 const int ShiftOutClockPin = 9;   // CLOCK
-boolean rxShiftInRead;
+// boolean rxShiftInRead;
 byte rxShiftInButton[3]{0,0,0};  // three button bank: 1-8 switch, 9-16 one from, encoder...
 
 int BAND = 0;
@@ -346,8 +345,8 @@ int timeout2;
 
 void setup() {
   BOARD_ID = GetBoardId();
+  Serial.begin(115200);
   #if defined(SERIAL_debug)
-    Serial.begin(115200);
     Serial.setTimeout(10);
 
     Serial.println();
@@ -372,6 +371,7 @@ void setup() {
     // lcd.begin();
     lcd.init();
     lcd.createChar(0, LockChar);
+    lcd.createChar(1, EthChar);
     lcd.clear();
   #endif
 
@@ -383,67 +383,70 @@ void setup() {
     LastMac = 0x00 + BOARD_ID;
     mac[5] = LastMac;
 
-    #if defined __USE_DHCP__
-      Ethernet.begin(mac);
-    #else
-    Ethernet.begin(mac, ip, myDns, gateway, subnet);
-    #endif
+    EthernetCheck();
 
-
-    #if defined(LCD)
-      lcd.setCursor(1, 0);
-      lcd.print(F("IP SWITCH by"));
-      lcd.setCursor(1, 1);
-      lcd.print(F("RemoteQTH.com"));
-      delay(1000);
-      lcd.clear();
-      lcd.setCursor(1, 0);
-      lcd.print(F("Net-ID: "));
-      lcd.print(BOARD_ID);
-      lcd.setCursor(1, 1);
-      lcd.print(F("[DHCP-"));
-      #if defined __USE_DHCP__
-        lcd.print(F("ON]"));
-        IPAddress CheckIP = Ethernet.localIP();
-        if( CheckIP[0]==0 && CheckIP[1]==0 && CheckIP[2]==0 && CheckIP[3]==0 ){
-          lcd.clear();
-          lcd.setCursor(1, 0);
-          lcd.print(F("DHCP FAIL"));
-          lcd.setCursor(1, 1);
-          lcd.print(F("please restart"));
-          while(1) {
-            // infinite loop
-          }
-        }
-      #else
-        lcd.print(F("OFF]"));
-      #endif
-      delay(3000);
-      lcd.clear();
-      lcd.setCursor(1, 0);
-      lcd.print(F("IP address:"));
-      lcd.setCursor(1, 1);
-      lcd.print(Ethernet.localIP());
-      delay(2500);
-      lcd.clear();
-    #endif
-
-    server.begin();                     // Web
-    UdpCommand.begin(UdpCommandPort);   // UDP
+    // #if defined __USE_DHCP__
+    //   Ethernet.begin(mac);
+    // #else
+    // Ethernet.begin(mac, ip, myDns, gateway, subnet);
+    // #endif
+    //
+    //
+    // #if defined(LCD)
+    //   lcd.setCursor(1, 0);
+    //   lcd.print(F("IP SWITCH by"));
+    //   lcd.setCursor(1, 1);
+    //   lcd.print(F("RemoteQTH.com"));
+    //   delay(1000);
+    //   lcd.clear();
+    //   lcd.setCursor(1, 0);
+    //   lcd.print(F("Net-ID: "));
+    //   lcd.print(BOARD_ID);
+    //   lcd.setCursor(1, 1);
+    //   lcd.print(F("[DHCP-"));
+    //   #if defined __USE_DHCP__
+    //     lcd.print(F("ON]"));
+    //     IPAddress CheckIP = Ethernet.localIP();
+    //     if( CheckIP[0]==0 && CheckIP[1]==0 && CheckIP[2]==0 && CheckIP[3]==0 ){
+    //       lcd.clear();
+    //       lcd.setCursor(1, 0);
+    //       lcd.print(F("DHCP FAIL"));
+    //       lcd.setCursor(1, 1);
+    //       lcd.print(F("please restart"));
+    //       while(1) {
+    //         // infinite loop
+    //       }
+    //     }
+    //   #else
+    //     lcd.print(F("OFF]"));
+    //   #endif
+    //   delay(3000);
+    //   lcd.clear();
+    //   lcd.setCursor(1, 0);
+    //   lcd.print(F("IP address:"));
+    //   lcd.setCursor(1, 1);
+    //   lcd.print(Ethernet.localIP());
+    //   delay(2500);
+    //   lcd.clear();
+    // #endif
+    //
+    // server.begin();                     // Web
+    // UdpCommand.begin(UdpCommandPort);   // UDP
 
   #endif
   // ANTname[0] = " [timeout]  ";
   InterruptON(1,1); // ptt, enc
-  SendBroadcastUdp();
 }
 //---------------------------------------------------------------------------------------------------------
 
 void loop() {
+  EthernetCheck();
   LcdDisplay();
   IncomingUDP();
   PttOff();
+  // NetId();   // Live change ID/BAND
 
-  // NetId();
+
 
 
 // ToDo
@@ -495,34 +498,50 @@ void InterruptON(int ptt, int enc){
 
 void EncoderInterrupt(){
   InterruptON(1,0); // ptt, enc
+  boolean UseButt = 0;
   if(PTT==false){
     rxShiftInButton[1]=0;
     rxShiftInButton[2]=0;
+
+    // Encoder and buttons
     if(digitalRead(EncBPin)==0){
       if(EncoderCount<NumberOfEncoderOutputs-1){
         EncoderCount++;
       }else{
         EncoderCount=0;
       }
+      EncEndStatus=1;
+      EncEndTimer[0]=millis();
     }else{
       if(AccKeyboardShift()==true){
-        // Serial.println(rxShiftInButton[0], BIN);
-        // Serial.println();
+        UseButt=1;
+        // Serial.print(rxShiftInButton[0], BIN);
+        // Serial.print(" rxSHIFT ");
+        // Serial.println(millis());
       }else{
         if(EncoderCount>0){
           EncoderCount--;
         }else{
           EncoderCount=NumberOfEncoderOutputs-1;
         }
+        EncEndStatus=1;
+        EncEndTimer[0]=millis();
       }
     }
+
+    // Over/under count
     if(EncoderCount<8){
       rxShiftInButton[1]=rxShiftInButton[1] | (1<<EncoderCount);
     }else{
       rxShiftInButton[2]=rxShiftInButton[2] | (1<<EncoderCount-8);
     }
 
-    TxUDP();
+    if( (millis()-ButtDebounceTimer[0]>ButtDebounceTimer[1] && UseButt==1) || UseButt==0 ){
+      TxUDP();
+      if(UseButt==1){
+        ButtDebounceTimer[0]=millis();
+      }
+    }
     #if defined(LCD)
       LcdNeedRefresh = true;
     #endif
@@ -533,40 +552,43 @@ void EncoderInterrupt(){
 //-------------------------------------------------------------------------------------------------------
 
 bool AccKeyboardShift(){    // run from interrupt
-  if(millis()-ButtDebounceTimer[0]>ButtDebounceTimer[1]){
     digitalWrite(ShiftInLatchPin,1);   //Set latch pin to 1 to get recent data into the CD4021
     delayMicroseconds(15);
     digitalWrite(ShiftInLatchPin,0);     //Set latch pin to 0 to get data from the CD4021
     bool KeyboardDetect = false;
-    for (int i=1; i<9; i++){                // 16 = two bank
+    for (int i=0; i<8; i++){                // 16 = two bank
       digitalWrite(ShiftInClockPin, 0);
-      rxShiftInRead = digitalRead(ShiftInDataPin);
-        switch (rxShiftInRead) {
-          case 0:
-              KeyboardDetect = true;
-              switch (i) {
-                case 1: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<3); break;  // invert n-th bit
-                case 2: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<2); break;
-                case 3: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<1); break;
-                case 4: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<0); break;
-                case 5: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<7); break;
-                case 6: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<6); break;
-                case 7: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<5); break;
-                case 8: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<4); break;
-                default:
-                  // if nothing else matches, do the default
-                break;
-              }
-            break;
-          case 1: break;
+      bool rxShiftInRead = digitalRead(ShiftInDataPin);
+
+        if(rxShiftInRead==0){
+          if(millis()-ButtDebounceTimer[0]>ButtDebounceTimer[1]){
+            rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<ButtonMapping[i]);  // invert n-th bit
+          }
+          KeyboardDetect = true;
         }
-        digitalWrite(ShiftInClockPin, 1);
+      //   switch (rxShiftInRead) {
+      //     case 0:
+      //         KeyboardDetect = true;
+      //         switch (i) {
+      //           case 1: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<3); break;  // invert n-th bit
+      //           case 2: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<2); break;
+      //           case 3: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<1); break;
+      //           case 4: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<0); break;
+      //           case 5: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<7); break;
+      //           case 6: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<6); break;
+      //           case 7: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<5); break;
+      //           case 8: rxShiftInButton[0] = rxShiftInButton[0] ^ (1<<4); break;
+      //           default:
+      //             // if nothing else matches, do the default
+      //           break;
+      //         }
+      //       break;
+      //     case 1: break;
+      //   }
+
+      digitalWrite(ShiftInClockPin, 1);
     }
     return KeyboardDetect;
-    if(KeyboardDetect==true){
-      ButtDebounceTimer[0]=millis();
-    }
-  }
 }
 //---------------------------------------------------------------------------------------------------------
 
@@ -598,6 +620,92 @@ void NetId(){
     // }
   }
 #endif
+//---------------------------------------------------------------------------------------------------------
+
+void LcdDisplay(){
+  #if defined(LCD)
+    if(millis()-LcdRefresh[0]>LcdRefresh[1] || LcdNeedRefresh == true){
+
+      if(RemoteSwLatencyAnsw==1 || (RemoteSwLatencyAnsw==0 && millis() < RemoteSwLatency[0]+RemoteSwLatency[1]*5)){ // if answer ok, or latency measure nod end
+        if(millis()-EncEndTimer[0]>EncEndTimer[1] && EncEndStatus==1 && digitalRead(EncBPin)==1 && digitalRead(EncAShiftInPin)==1){
+          EncEndStatus = 0;
+        }
+        if(millis()-EncEndTimer[0]>EncEndTimer[1] && EncEndStatus==1 && (digitalRead(EncBPin)==0 || digitalRead(EncAShiftInPin)==0)){
+          lcd.noBacklight();
+          lcd.setCursor(0,0);
+          lcd.print("Intermediate    ");
+          lcd.setCursor(0,1);
+          lcd.print("position!");
+          delay(200);
+          lcd.backlight();
+        }else{
+          // Encoder
+          for (int i=0; i<NumberOfEncoderOutputs; i++){
+            lcd.setCursor(i,0);
+            if(i==EncoderCount){
+              if(EncoderCount>8){
+                lcd.setCursor(i-1,0);
+                lcd.print(EncoderCount+1, DEC);
+              }else{
+                lcd.print(EncoderCount+1, DEC);
+              }
+            }else{
+              lcd.print(' ');
+            }
+          }
+          // Keyboard
+          for (int i=0; i<8; i++){
+            lcd.setCursor(i,1);
+            if (rxShiftInButton[0] & (1<<i)) {
+              lcd.print(i+1);
+            }else{
+              lcd.print(' ');
+            }
+          }
+          // PTT
+          lcd.setCursor(8,1);
+          if(PTT==true){
+            // lcd.write(byte(0));        // Lock icon
+            lcd.print((char)0);
+          }else{
+            lcd.print("|");
+          }
+        }
+
+        lcd.print(" ");
+        if(EthLinkStatus==1){
+          if(RemoteSwLatencyAnsw==1){ // if answer ok, or latency measure nod end
+            // lcd.print("*");
+            lcd.print((char)1);   // EthChar
+          }else if(RemoteSwLatencyAnsw==0 && millis() < RemoteSwLatency[0]+RemoteSwLatency[1]*5){
+              lcd.print(" ");
+          }else{
+            lcd.print("!");
+          }
+        }else{
+          lcd.print("x");
+        }
+        lcd.print(" ID-");
+        lcd.print(BOARD_ID, HEX);
+      }else if(EthLinkStatus==0){
+        lcd.setCursor(0, 0);
+        lcd.print((char)1);   // EthChar
+        lcd.print(F(" Please connect"));
+        lcd.setCursor(0, 1);
+        lcd.print(F("  ethernet      "));
+      }else{
+        lcd.setCursor(0, 0);
+        lcd.print(F(" IPswitch-ID: "));
+        lcd.print(BOARD_ID, HEX);
+        lcd.setCursor(0, 1);
+        lcd.print(F("  not detected  "));
+      }
+
+      LcdRefresh[0]=millis();
+      LcdNeedRefresh = false;
+    }
+  #endif
+}
 //-------------------------------------------------------------------------------------------------------
 
 void SendBroadcastUdp(){
@@ -630,65 +738,6 @@ void SendBroadcastUdp(){
 }
 //---------------------------------------------------------------------------------------------------------
 
-void LcdDisplay(){
-  #if defined(LCD)
-    if(millis()-LcdRefresh[0]>LcdRefresh[1] || LcdNeedRefresh == true){
-
-      if(RemoteSwLatencyAnsw==1 || (RemoteSwLatencyAnsw==0 && millis() < RemoteSwLatency[0]+RemoteSwLatency[1]*5)){ // if answer ok, or latency measure nod end
-        for (int i=0; i<NumberOfEncoderOutputs; i++){
-          lcd.setCursor(i,0);
-          if(i==EncoderCount){
-            if(EncoderCount>8){
-              lcd.setCursor(i-1,0);
-              lcd.print(EncoderCount+1, DEC);
-            }else{
-              lcd.print(EncoderCount+1, DEC);
-            }
-          }else{
-            lcd.print(" ");
-          }
-        }
-        for (int i=0; i<8; i++){
-          lcd.setCursor(i,1);
-          if (rxShiftInButton[0] & (1<<i)) {
-            lcd.print(i+1);
-          }else{
-            lcd.print(" ");
-          }
-        }
-
-        lcd.setCursor(8,1);
-        if(PTT==true){
-          // lcd.write(byte(0));        // Lock icon
-          lcd.print((char)0);
-        }else{
-          lcd.print("|");
-        }
-        lcd.print(" ");
-        if(RemoteSwLatencyAnsw==1){ // if answer ok, or latency measure nod end
-          lcd.print("*");
-        }else if(RemoteSwLatencyAnsw==0 && millis() < RemoteSwLatency[0]+RemoteSwLatency[1]*5){
-            lcd.print(" ");
-        }else{
-          lcd.print("!");
-        }
-        lcd.print(" ID-");
-        lcd.print(BOARD_ID, HEX);
-      }else{
-        lcd.setCursor(0, 0);
-        lcd.print(F(" IPswitch-ID: "));
-        lcd.print(BOARD_ID, HEX);
-        lcd.setCursor(0, 1);
-        lcd.print(F("  not detected  "));
-      }
-
-      LcdRefresh[0]=millis();
-      LcdNeedRefresh = false;
-    }
-  #endif
-}
-//---------------------------------------------------------------------------------------------------------
-
 void IncomingUDP(){
   #if defined(EthModule)
     InterruptON(0,0); // ptt, enc
@@ -716,7 +765,7 @@ void IncomingUDP(){
 
           lcd.clear();
           lcd.setCursor(0, 0);
-          lcd.print(F("DetectSw-ID: "));
+          lcd.print(F("Detect SW #"));
           lcd.print(packetBuffer[3]);
           lcd.setCursor(0, 1);
           lcd.print(DetectedRemoteSw [hexToDecBy4bit(packetBuffer[3])] [0]);
@@ -770,24 +819,34 @@ void IncomingUDP(){
             // Serial2.println(HowRemoteSwitchID());
 
             // need if RX answer from band change query
-            rxShiftInButton[0] = packetBuffer[2];
-            rxShiftInButton[1] = packetBuffer[3];
-            rxShiftInButton[2] = packetBuffer[4];
+            // rxShiftInButton[0] = packetBuffer[2];
+            // rxShiftInButton[1] = packetBuffer[3];
+            // rxShiftInButton[2] = packetBuffer[4];
+
+            // Serial.print((byte)packetBuffer[2], BIN);
+            // Serial.print(" rxUDP   ");
+            // Serial.println(millis());
+            // Serial.println();
+
+            byte ButtonSequence = 0;
+            // 4bit shift left OR 4bit shift right = 4bit shift rotate
+            ButtonSequence = (byte)packetBuffer[2] >> 4 | (byte)packetBuffer[2] << 4;
 
             digitalWrite(ShiftOutLatchPin, LOW);  // ready for receive data
-            shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, packetBuffer[4]);    // encoder
-            shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, packetBuffer[3]);    // encoder
-            shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, packetBuffer[2]);    // buttons
+            // shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, packetBuffer[4]);    // encoder
+            // shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, packetBuffer[3]);    // encoder
+            shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, ButtonSequence);    // buttons
+            shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, ButtonSequence);    // buttons
             digitalWrite(ShiftOutLatchPin, HIGH);    // switch to output pin
           // }
 
           #if defined(SERIAL_debug)
             Serial.print("RX m:");
-            Serial.print(packetBuffer[2], BIN);
+            Serial.print((byte)packetBuffer[2], BIN);
             Serial.print("|");
-            Serial.print(packetBuffer[3], BIN);
+            Serial.print((byte)packetBuffer[3], BIN);
             Serial.print("|");
-            Serial.print(packetBuffer[4], BIN);
+            Serial.print((byte)packetBuffer[4], BIN);
             Serial.print(packetBuffer[5]);
             Serial.print(" > Latency: ");
             Serial.println(RemoteSwLatency[1]);
@@ -821,6 +880,10 @@ void TxUDP(){
       TxUdpBuffer[4] = rxShiftInButton[2];  // encoder
       TxUdpBuffer[5] = B00111011;           // ;
 
+      // Serial.print(TxUdpBuffer[2], BIN);
+      // Serial.print(" txUDP   ");
+      // Serial.println(millis());
+
       UdpCommand.beginPacket(RemoteSwIP, RemoteSwPort);
         UdpCommand.write(TxUdpBuffer, sizeof(TxUdpBuffer));   // send buffer
         RemoteSwLatency[0] = millis(); // set START time mark UDP command latency
@@ -834,7 +897,9 @@ void TxUDP(){
         Serial.print(RemoteSwPort);
         Serial.print(" m:");
         Serial.print(TxUdpBuffer[2], HEX);
+        Serial.print("|");
         Serial.print(TxUdpBuffer[3], HEX);
+        Serial.print("|");
         Serial.print(TxUdpBuffer[4], HEX);
         Serial.println(";");
       #endif
@@ -852,6 +917,62 @@ void PttDetector(){   // call from interupt
   PttTiming[0]=millis();
 }
 //-------------------------------------------------------------------------------------------------------
+
+void EthernetCheck(){
+  if(millis()-EthLinkStatusTimer[0]>EthLinkStatusTimer[1] && EnableEthernet==1){
+    if ((Ethernet.linkStatus() == Unknown || Ethernet.linkStatus() == LinkOFF) && EthLinkStatus==1) {
+      EthLinkStatus=0;
+      #if defined(SERIAL_debug)
+        Serial.println("Ethernet DISCONNECTED");
+      #endif
+    }else if (Ethernet.linkStatus() == LinkON && EthLinkStatus==0) {
+      EthLinkStatus=1;
+      #if defined(SERIAL_debug)
+        Serial.println("Ethernet CONNECTED");
+      #endif
+
+      lcd.clear();
+      lcd.setCursor(1, 0);
+      lcd.print(F("Net-ID: "));
+      lcd.print(BOARD_ID);
+      lcd.setCursor(1, 1);
+      lcd.print(F("[DHCP-"));
+      if(EnableDHCP==1){
+          lcd.print(F("ON]..."));
+          Ethernet.begin(mac);
+          IPAddress CheckIP = Ethernet.localIP();
+          if( CheckIP[0]==0 && CheckIP[1]==0 && CheckIP[2]==0 && CheckIP[3]==0 ){
+            lcd.clear();
+            lcd.setCursor(1, 0);
+            lcd.print(F("DHCP FAIL"));
+            lcd.setCursor(1, 1);
+            lcd.print(F("please restart"));
+            while(1) {
+              // infinite loop
+            }
+          }
+      }else{
+        lcd.print(F("OFF]"));
+        Ethernet.begin(mac, ip, myDns, gateway, subnet);
+      }
+
+        delay(2000);
+        lcd.clear();
+        lcd.setCursor(1, 0);
+        lcd.print(F("IP address:"));
+        lcd.setCursor(1, 1);
+        lcd.print(Ethernet.localIP());
+        delay(2500);
+        lcd.clear();
+
+      server.begin();                     // Web
+      UdpCommand.begin(UdpCommandPort);   // UDP
+      SendBroadcastUdp();
+
+    }
+    EthLinkStatusTimer[0]=millis();
+  }
+}
 //---------------------------------------------------------------------------------------------------------
 
 void TxBroadcastUdp(String MSG){
