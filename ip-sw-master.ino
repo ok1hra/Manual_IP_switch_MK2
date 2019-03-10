@@ -38,6 +38,8 @@ Features:
 
   Changelog
   ---------
+  2019-03 - redesign CLI
+          - multi control support (idea TNX SM0MDG)
   2019-01 - rx encoder range and relay set
           - ptt lock
           - NET-ID prefix/sufix support
@@ -50,17 +52,15 @@ Features:
   - select ID by band decoder
   - encoder show ANT fullname
 */
-const char* REV = "20190120";
+const char* REV = "20190310";
 
 //=====[ Settings ]===========================================================================================
 
 #define LcdI2Caddress  0x27   // 0x27 0x3F - may be find with I2C scanner https://playground.arduino.cc/Main/I2cScanner
 #define LCD_PCF8574           // If LCD uses PCF8574 chip
-//#define LCD_PCF8574T        // If LCD uses PCF8574T chip
-//#define LCD_PCF8574AT       // If LCD uses PCF8574AT chip
-#define HW_BCD_SW             // Enable hardware NET-ID bcd switch on bottom side
-                              // if disable, ind may be set via serial terminal (send ? for more info)
-// #define SERIAL_debug       // Enable debuging on serial terminal, enable with send *
+// #define LCD_PCF8574T          // If LCD uses PCF8574T chip
+// #define LCD_PCF8574AT         // If LCD uses PCF8574AT chip
+// #define SERIAL_debug          // Enable debuging on serial terminal, enable with send *
 // #define FastBoot              // Enable fast power up, without shown LCD information
 
 // You can set remote relay IP address, from outside local network
@@ -104,6 +104,9 @@ byte DetectedRemoteSw[16][5]{
 // #define YAESU_CAT_OUT      // send frequency to RS232 CAT ** for operation must disable REQUEST **
 
 #define LCD                   // Uncoment to Enable I2C LCD
+bool HW_BCD_SW = 0;              // enable hardware ID board bcd switch (disable if not installed)
+bool SET_RX_DATA = 0;         // multi control
+bool Need_SET_RX_DATA = 1;
 bool DEBUG = 1;
 long HW_BCD_SWTimer[2]{0,3000};
 int NumberOfEncoderOutputs = 8;  // 2-16
@@ -115,7 +118,6 @@ long ButtDebounceTimer[2]{0,200};
 long EncEndTimer[2]{0,1000};
 int EncEndStatus = 0;
 const int ButtonMapping[8]={3,2,1,0,7,6,5,4}; // 1-8
-bool NeedRxSettings = 1;
 
 #define EthModule             // enable Ethernet module if installed
 #define __USE_DHCP__          // enable DHCP
@@ -387,37 +389,53 @@ int timeout2;
 #endif
 
 #include <EEPROM.h>
+/*
+0 - NumberOfEncoderOutputs
+1 - NET_ID
+2 - Set RX data
+3 - HW BCD switch ON/OFF
+*/
 byte ReadEepromValue[1];
 
 //---------------------------------------------------------------------------------------------------------
 
 void setup() {
+  Serial.begin(115200);
 
-  #if defined(HW_BCD_SW)
+  // 1-net ID
+  if(HW_BCD_SW==true){
     bitClear(NET_ID, 0);
     bitClear(NET_ID, 1);
     bitClear(NET_ID, 2);
     bitClear(NET_ID, 3);
     NET_ID = NET_ID | GetBoardId();
     TxUdpBuffer[0] = NET_ID;
-  #else
+  }else{
       NET_ID = EEPROM.read(1);
       TxUdpBuffer[0] = NET_ID;
-  #endif
+  }
 
-  Serial.begin(115200);
-  #if defined(SERIAL_debug)
-  // if(DEBUG==1){
-    Serial.setTimeout(10);
-    Serial.println();
-    Serial.println(F("========================="));
-    Serial.print(F("  IP SW MASTER NET ID: "));
-    Serial.println(NET_ID, HEX);
-    Serial.println(F("========================="));
-    Serial.println(F("  Press '?' for info"));
-    Serial.println();
+  // 2-Set RX data
+  // Serial.print("Set RX data ");
+  // if(EEPROM.read(2)<2){
+  //   SET_RX_DATA = EEPROM.read(2);
+  // }else{
+  //   EEPROM.write(2, SET_RX_DATA);
   // }
-  #endif
+  // if(SET_RX_DATA==1){
+  //   Serial.println("[ON]");
+  // }else{
+  //   Serial.println("[OFF]");
+  // }
+
+  // 3-HW_BCD_SW
+  Serial.print("HW BCD");
+  if(EEPROM.read(3)<2){
+    HW_BCD_SW = EEPROM.read(3);
+    Serial.println(" read from EEPROM");
+  }else{
+    Serial.println(" set to OFF");
+  }
 
   pinMode(EncBPin, INPUT);
   pinMode(EncAShiftInPin, INPUT);
@@ -479,6 +497,7 @@ void setup() {
     lcd.clear();
   #endif
   InterruptON(1,1); // ptt, enc
+  ListCommands();
 }
 //---------------------------------------------------------------------------------------------------------
 
@@ -515,7 +534,7 @@ void ShiftOutTest(){
 }
 //---------------------------------------------------------------------------------------------------------
 void CheckNetId(){
-  #if defined(HW_BCD_SW)
+  if (HW_BCD_SW==true){
     if(millis()-HW_BCD_SWTimer[0]>HW_BCD_SWTimer[1]){
       bitClear(NET_ID, 0);
       bitClear(NET_ID, 1);
@@ -527,6 +546,9 @@ void CheckNetId(){
         EEPROM.write(1, NET_ID); // address, value
         // EEPROM.commit();
         Serial.print("** Now NET-ID change to 0x");
+        if(NET_ID <=0x0f){
+          Serial.print(F("0"));
+        }
         Serial.print(NET_ID, HEX);
         Serial.println(" **");
         #if defined(SERIAL_debug)
@@ -537,11 +559,10 @@ void CheckNetId(){
           }
         #endif
         TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
-        NeedRxSettings=1;
       }
       HW_BCD_SWTimer[0]=millis();
     }
-  #endif
+  }
 }
 
 //---------------------------------------------------------------------------------------------------------
@@ -559,18 +580,8 @@ void SerialCLI(){
   if (Serial.available() > 0) {
           incomingByte = Serial.read();
 
-          // *
-         if(incomingByte==42){
-            DEBUG = !DEBUG;
-            Serial.print(F("** Serial DEBUG "));
-            if(DEBUG==1){
-              Serial.println(F("ENABLE **"));
-            }else{
-              Serial.println(F("DISABLE **"));
-            }
-
-        // l
-        }else if(incomingByte==108){
+      // .
+      if(incomingByte==46){
           Serial.print(F("RX ["));
           Serial.print(packetBuffer[0], HEX);
           for(int i=1; i<8; i++){
@@ -580,6 +591,7 @@ void SerialCLI(){
           Serial.print(UdpCommand.remoteIP());
           Serial.print(":");
           Serial.println(UdpCommand.remotePort());
+          Serial.println(F("List detected switch by ID sufix"));
           for (int i = 0; i < 16; i++) {
             Serial.print(i, HEX);
             Serial.print(F("  "));
@@ -594,98 +606,70 @@ void SerialCLI(){
             Serial.println(DetectedRemoteSw [i] [4]);
           }
 
+        // *
+        #if defined(SERIAL_debug)
+          }else if(incomingByte==42){
+            DEBUG = !DEBUG;
+            Serial.print(F("** Serial DEBUG "));
+            if(DEBUG==1){
+              Serial.println(F("ENABLE **"));
+            }else{
+              Serial.println(F("DISABLE **"));
+            }
+            #endif
+
+        // // /
+        // }else if(incomingByte==47){
+        //     SET_RX_DATA = !SET_RX_DATA;
+        //     EEPROM.write(2, SET_RX_DATA);
+        //     Serial.print(F("** Set RX data "));
+        //     if(SET_RX_DATA==1){
+        //       Serial.println(F("ENABLE **"));
+        //     }else{
+        //       Serial.println(F("DISABLE **"));
+        //     }
+
           // ?
         }else if(incomingByte==63){
-          Serial.println();
-          Serial.println(F("  ========================="));
-          Serial.print(F("   IP SW MASTER NET ID: "));
-          Serial.print(NET_ID, HEX);
-          Serial.print(" [BCD-");
-           Serial.print(digitalRead(Id1Pin));
-           Serial.print(digitalRead(Id2Pin));
-           Serial.print(digitalRead(Id3Pin));
-          Serial.println("]");
-          Serial.println(F("  ========================="));
-          Serial.print(F("  Version: "));
-          Serial.println(REV);
-          Serial.print(F("  IP address:"));
-          Serial.println(Ethernet.localIP());
-          Serial.print(F("  IP switch: "));
-          Serial.print(RemoteSwIP);
-          Serial.print(F(":"));
-          Serial.println(RemoteSwPort);
-          Serial.print(F("  Serial debug: "));
-          if(DEBUG==1){
-            Serial.println(F("ENABLE"));
-          }else{
-            Serial.println(F("DISABLE"));
-          }
-          Serial.print(F("  Encoder range: "));
-          Serial.println(NumberOfEncoderOutputs);
-
-          Serial.println(F("  -----------------------------"));
-          Serial.println(F("      ? for info"));
-          Serial.println(F("      * serial debug on/off"));
-          Serial.println(F("      l IP list "));
-          Serial.println(F("   #0-f network ID prefix [hex]"));
-          #if !defined(HW_BCD_SW)
-            Serial.println(F("        +network ID sufix [hex]"));
-          #endif
-          Serial.println(F("  -----------------------------"));
-
-          //   // 0-9 a-f
-          // #if !defined(HW_BCD_SW)
-          // }else if( (incomingByte>=48 && incomingByte<=57) || (incomingByte>=97 && incomingByte<=102) ){
-          //   if(incomingByte>=48 && incomingByte<=57){
-          //     NET_ID = incomingByte-48;
-          //   }else if(incomingByte>=97 && incomingByte<=102){
-          //     NET_ID = incomingByte-87;
-          //   }
-          //   TxUdpBuffer[0] = NET_ID;
-          //   // EEPROM.write(1, NET_ID); // address, value
-          //   // EEPROM.commit();
-          //   Serial.print("** Now NET-ID change to 0x0");
-          //   Serial.print(NET_ID, HEX);
-          //   Serial.println(" **");
-          //   TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
-          //   NeedRxSettings=1;
-          //   EEPROM.write(1, NET_ID);
-          // #endif
+          ListCommands();
 
           // #
           }else if(incomingByte==35){
-              Serial.println("Press NET-ID X_ prefix 0-f...");
+                Serial.println("Press NET-ID X_ prefix 0-f...");
               Serial.print("> ");
               while (Serial.available() == 0) {
                 // Wait
               }
               incomingByte = Serial.read();
+
               if( (incomingByte>=48 && incomingByte<=57) || (incomingByte>=97 && incomingByte<=102) ){
-                bitClear(NET_ID, 4);
-                bitClear(NET_ID, 5);
-                bitClear(NET_ID, 6);
-                bitClear(NET_ID, 7);
-                Serial.write(incomingByte);
-                Serial.println();
-                if(incomingByte>=48 && incomingByte<=57){
-                  incomingByte = incomingByte-48;
-                  incomingByte = (byte)incomingByte << 4;
-                  NET_ID = NET_ID | incomingByte;
-                  TxUdpBuffer[0] = NET_ID;
-                }else if(incomingByte>=97 && incomingByte<=102){
-                  incomingByte = incomingByte-87;
-                  incomingByte = (byte)incomingByte << 4;
-                  NET_ID = NET_ID | incomingByte;
-                  TxUdpBuffer[0] = NET_ID;
-                }
-                // sufix
-                #if !defined(HW_BCD_SW)
-                  Serial.println("Press NET-ID _X sufix 0-f...");
-                  Serial.print("> ");
-                  while (Serial.available() == 0) {
-                    // Wait
+                // prefix
+                  bitClear(NET_ID, 4);
+                  bitClear(NET_ID, 5);
+                  bitClear(NET_ID, 6);
+                  bitClear(NET_ID, 7);
+                  Serial.write(incomingByte);
+                  Serial.println();
+                  if(incomingByte>=48 && incomingByte<=57){
+                    incomingByte = incomingByte-48;
+                    incomingByte = (byte)incomingByte << 4;
+                    NET_ID = NET_ID | incomingByte;
+                    TxUdpBuffer[0] = NET_ID;
+                  }else if(incomingByte>=97 && incomingByte<=102){
+                    incomingByte = incomingByte-87;
+                    incomingByte = (byte)incomingByte << 4;
+                    NET_ID = NET_ID | incomingByte;
+                    TxUdpBuffer[0] = NET_ID;
                   }
-                  incomingByte = Serial.read();
+                // sufix
+                if(HW_BCD_SW==false){
+                    Serial.println("Press NET-ID _X sufix 0-f...");
+                    Serial.print("> ");
+                    while (Serial.available() == 0) {
+                      // Wait
+                    }
+                    incomingByte = Serial.read();
+
                   if( (incomingByte>=48 && incomingByte<=57) || (incomingByte>=97 && incomingByte<=102) ){
                     bitClear(NET_ID, 0);
                     bitClear(NET_ID, 1);
@@ -702,34 +686,141 @@ void SerialCLI(){
                       NET_ID = NET_ID | incomingByte;
                       TxUdpBuffer[0] = NET_ID;
                     }
-                #endif
+                // #endif
                     EEPROM.write(1, NET_ID); // address, value
                     // EEPROM.commit();
                     Serial.print("** Now NET-ID change to 0x");
+                    if(NET_ID <=0x0f){
+                      Serial.print(F("0"));
+                    }
                     Serial.print(NET_ID, HEX);
                     Serial.println(" **");
-                    if(DEBUG==1){
-                      Serial.print("EEPROM read [");
-                      Serial.print(EEPROM.read(1), HEX);
-                      Serial.println("]");
-                    }
+                    #if defined(SERIAL_debug)
+                      if(DEBUG==1){
+                        Serial.print("EEPROM read [");
+                        Serial.print(EEPROM.read(1), HEX);
+                        Serial.println("]");
+                      }
+                    #endif
                     TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
-                #if !defined(HW_BCD_SW)
+                    // if(TxUdpBuffer[2] == 'm'){
+                    //   TxUDP('s', packetBuffer[2], ShiftOutByte[0], ShiftOutByte[1], ShiftOutByte[2], 0);
+                    // }
+                // #if !defined(HW_BCD_SW)
                   }else{
                     Serial.println(" accepts 0-f, exit");
                   }
-                #endif
+                // #endif
+                }
               }else{
                 Serial.println(" accepts 0-f, exit");
+              }
+
+
+          // +
+          }else if(incomingByte==43){
+              HW_BCD_SW=!HW_BCD_SW;
+              Serial.print("** Net ID sufix by ");
+              EEPROM.write(3, HW_BCD_SW);
+              // EEPROM.commit();
+              if(HW_BCD_SW==true){
+                Serial.println("EEPROM/[BCD switch] **");
+                bitClear(NET_ID, 0);
+                bitClear(NET_ID, 1);
+                bitClear(NET_ID, 2);
+                bitClear(NET_ID, 3);
+                NET_ID = NET_ID | GetBoardId();
+                TxUdpBuffer[0] = NET_ID;
+              }else{
+                NET_ID = EEPROM.read(1);
+                TxUdpBuffer[0] = NET_ID;
+                Serial.println("[EEPROM]/BCD switch **");
               }
 
           }else{
             Serial.print(F(" ["));
             Serial.write(incomingByte); //, DEC);
             Serial.println(F("] unknown command - for more info press 'h'"));
+            ListCommands();
           }
   }
 }
+//---------------------------------------------------------------------------------------------------------
+void ListCommands(){
+  Serial.println();
+  Serial.println(F("  =========================="));
+  Serial.print(F("   IP SW MASTER NET ID: 0x"));
+  if(NET_ID <=0x0f){
+    Serial.print(F("0"));
+  }
+  Serial.print(NET_ID, HEX);
+  if(HW_BCD_SW==true){
+    Serial.print(" [BCD-");
+    Serial.print(digitalRead(Id1Pin));
+    Serial.print(digitalRead(Id2Pin));
+    Serial.print(digitalRead(Id3Pin));
+    Serial.print("]");
+  }
+    Serial.println();
+  Serial.println(F("  =========================="));
+  Serial.print(F("  Version: "));
+  Serial.println(REV);
+  Serial.print(F("  IP address:"));
+  Serial.println(Ethernet.localIP());
+  Serial.print(F("  IP switch: "));
+  Serial.print(RemoteSwIP);
+  Serial.print(F(":"));
+  Serial.println(RemoteSwPort);
+  Serial.print(F("  Encoder range: "));
+  Serial.println(NumberOfEncoderOutputs);
+  Serial.print(F("  Set RX data (multi control) "));
+  if(SET_RX_DATA==1){
+    Serial.println(F("[ON]"));
+  }else{
+    Serial.println(F("[OFF]"));
+  }
+
+  Serial.println(F("  -----------------------------"));
+  Serial.println(F("      ? for info"));
+  #if defined(SERIAL_debug)
+    Serial.print(F("      * serial debug ["));
+    if(DEBUG==1){
+      Serial.println(F("ON]"));
+    }else{
+      Serial.println(F("OFF]"));
+    }
+  #endif
+  Serial.println(F("      . IP list "));
+  Serial.print("      + Net ID sufix by ");
+    if(HW_BCD_SW==true){
+      Serial.println("EEPROM/[BCD switch]");
+    }else{
+      Serial.println("[EEPROM]/BCD switch");
+    }
+    Serial.print("      # network ID prefix [");
+    byte ID = NET_ID;
+    bitClear(ID, 0); // ->
+    bitClear(ID, 1);
+    bitClear(ID, 2);
+    bitClear(ID, 3);
+    ID = ID >> 4;
+      Serial.print(ID, HEX);
+    Serial.print("] hex (identify for multi control)");
+    Serial.println();
+    if(HW_BCD_SW==false){
+      ID = NET_ID;
+      bitClear(ID, 4);
+      bitClear(ID, 5);
+      bitClear(ID, 6);
+      bitClear(ID, 7); // <-
+      Serial.print("        +network ID sufix [");
+      Serial.print(ID, HEX);
+      Serial.print("] hex");
+      Serial.println();
+    }
+    Serial.println(F("  -----------------------------"));
+}
+
 //---------------------------------------------------------------------------------------------------------
 
 void InterruptON(int ptt, int enc){
@@ -827,7 +918,6 @@ void NetId(){
     if(NET_ID != GetBoardId()){
       NET_ID = GetBoardId();
       TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
-      NeedRxSettings=1;
     }
   }
 }
@@ -940,7 +1030,12 @@ void LcdDisplay(){
         }else{
           lcd.print("x");
         }
-        lcd.print(" ID-");
+        if(SET_RX_DATA==1){
+          lcd.print("m");
+        }else{
+          lcd.print(" ");
+        }
+        lcd.print("ID-");
         if(NET_ID < 0x0f){
           lcd.print(F("0"));
         }
@@ -960,6 +1055,10 @@ void LcdDisplay(){
         lcd.print(NET_ID, HEX);
         lcd.setCursor(0, 1);
         lcd.print(F("  not detected  "));
+        digitalWrite(ShiftOutLatchPin, LOW);  // ready for receive data
+        shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, 0x00);    // buttons
+        shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, 0x00);    // buttons
+        digitalWrite(ShiftOutLatchPin, HIGH);    // switch to output pin
       }
 
       LcdRefresh[0]=millis();
@@ -991,6 +1090,7 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
 
     // BROADCAST
     if(A=='b' && B=='r' && C=='o'){  // b r o
+      Need_SET_RX_DATA=1;
     // if(A==B01100010 && B==B01110010 && C==B01101111){  // b r o
       // direct
       for (int i=0; i<15; i++){
@@ -1057,8 +1157,9 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
           UdpCommand.write(TxUdpBuffer, sizeof(TxUdpBuffer));   // send buffer
         UdpCommand.endPacket();
         RemoteSwLatency[0] = millis(); // set START time mark UDP command latency
-        RemoteSwLatencyAnsw = 0;   // send command, wait to answer
-
+        if(A!='c' && B!='f' && C!='m'){
+          RemoteSwLatencyAnsw = 0;   // send command, wait to answer
+        }
         #if defined(SERIAL_debug)
           if(DEBUG==1){
             Serial.println();
@@ -1131,11 +1232,16 @@ void RX_UDP(char FROM, char TO){
         // && packetBuffer[2]== 'm'  // TO
         && packetBuffer[1]== FROM
         && packetBuffer[2]== TO
-        && packetBuffer[3]== ':'
+        && (packetBuffer[3]== ':' || packetBuffer[3]== '-')
         && packetBuffer[7]== ';'
       ){
         RemoteSwLatency[1] = (millis()-RemoteSwLatency[0])/2; // set latency (half path in ms us/2/1000)
         RemoteSwLatencyAnsw = 1;           // answer packet received
+        if(packetBuffer[3]== ':'){
+          SET_RX_DATA=0;    // set multi control
+        }else if(packetBuffer[3]== '-'){
+          SET_RX_DATA=1;    // set multi control
+        }
 
         // RX Broadcast / CFM
         if((packetBuffer[4]== 'b' && packetBuffer[5]== 'r') // && packetBuffer[6]== 'o')
@@ -1182,7 +1288,7 @@ void RX_UDP(char FROM, char TO){
           lcd.setCursor(7, 1);
           lcd.print(NumberOfEncoderOutputs);
           #if !defined(FastBoot)
-            delay(2000);
+            delay(1500);
           #endif
           LcdNeedRefresh = true;
           lcd.clear();
@@ -1213,6 +1319,7 @@ void RX_UDP(char FROM, char TO){
             }
           }
           #endif
+          TxUDP(ThisDevice, RemoteDevice, 'c', 'f', 'm');
 
         // RX DATA
         }else{
@@ -1245,30 +1352,30 @@ void RX_UDP(char FROM, char TO){
             }
           #endif
 
-          // RX and set
-          if(NeedRxSettings==1){
-            rxShiftInButton[0]=packetBuffer[4];
-            for(int i=0; i<16; i++){
-              if(i<8 && bitRead(packetBuffer[5], i) ){
-                EncoderCount=i;
-                break;
-              }
-              if(i>7 && bitRead(packetBuffer[6], i-8) ){
-                EncoderCount=i;
-                break;
-              }
+          // Check if RX different data
+          int EncoderCountTmp =0;
+          for(int i=0; i<16; i++){
+            if(i<8 && bitRead(packetBuffer[5], i) ){
+              EncoderCountTmp=i;
+              break;
             }
-            NeedRxSettings=0;
+            if(i>7 && bitRead(packetBuffer[6], i-8) ){
+              EncoderCountTmp=i;
+              break;
+            }
+          }
+          if( (SET_RX_DATA==1 || Need_SET_RX_DATA==1) && ( rxShiftInButton[0]!=packetBuffer[4] || EncoderCountTmp!=EncoderCount ) ){
+            rxShiftInButton[0]=packetBuffer[4];
+            EncoderCount=EncoderCountTmp;
             #if defined(SERIAL_debug)
               if(DEBUG==1){
-                Serial.print(F("RX Settings "));
-                Serial.print(rxShiftInButton[0], BIN);
-                Serial.print(F("|"));
-                Serial.println(EncoderCount);
+                Serial.println(F("RX different data > SET it "));
               }
             #endif
+            if(Need_SET_RX_DATA==1){
+              Need_SET_RX_DATA=0;
+            }
           }
-
           LcdNeedRefresh = true;
         } // else (rx data) end
       } // filtered end
@@ -1355,7 +1462,6 @@ void EthernetCheck(){
       server.begin();                     // Web
       UdpCommand.begin(UdpCommandPort);   // UDP
       TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
-      NeedRxSettings=1;
     }
     EthLinkStatusTimer[0]=millis();
   }
