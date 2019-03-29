@@ -40,6 +40,7 @@ Features:
   ---------
   2019-03 - redesign CLI
           - multi control support (idea TNX SM0MDG)
+          - PTT trasfer as one button
   2019-01 - rx encoder range and relay set
           - ptt lock
           - NET-ID prefix/sufix support
@@ -52,7 +53,7 @@ Features:
   - select ID by band decoder
   - encoder show ANT fullname
 */
-const char* REV = "20190310";
+const char* REV = "20190329";
 
 //=====[ Settings ]===========================================================================================
 
@@ -104,6 +105,8 @@ byte DetectedRemoteSw[16][5]{
 // #define YAESU_CAT_OUT      // send frequency to RS232 CAT ** for operation must disable REQUEST **
 
 #define LCD                   // Uncoment to Enable I2C LCD
+bool PttTransfer = 0;
+byte ButtonUseForPttTransfer= 8;  // 1-8
 bool HW_BCD_SW = 0;              // enable hardware ID board bcd switch (disable if not installed)
 bool SET_RX_DATA = 0;         // multi control
 bool Need_SET_RX_DATA = 1;
@@ -132,77 +135,79 @@ long EthLinkStatusTimer[2]{1500,1000};
 #define CIV_ADR_OUT  0x56     // CIV output HEX Icom adress (0x is prefix)
 // #define ENABLE_DIVIDER     // for highest voltage D-SUB pin 13 inputs up to 24V - need short JP9
 
-//=====[ FREQUEN RULES ]===========================================================================================
+#if defined(DUMMY)
 
-const long Freq2Band[16][2] = {/*
-Freq Hz from       to   Band number
-*/   {1810000,   2000000},  // #1 [160m]
-     {3500000,   3800000},  // #2  [80m]
-     {7000000,   7200000},  // #3  [40m]
-    {10100000,  10150000},  // #4  [30m]
-    {14000000,  14350000},  // #5  [20m]
-    {18068000,  18168000},  // #6  [17m]
-    {21000000,  21450000},  // #7  [15m]
-    {24890000,  24990000},  // #8  [12m]
-    {28000000,  29700000},  // #9  [10m]
-    {50000000,  52000000},  // #10  [6m]
-   {144000000, 146000000},  // #11  [2m]
-   {430000000, 440000000},  // #12  [70cm]
-   {1240000000, 1300000000},  // #13  [23cm]
-   {2300000000, 2450000000},  // #14  [13cm]
-   {3300000000, 3500000000},  // #15  [9cm]
-   {5650000000, 5850000000},  // #16  [6cm]
-};
+  //=====[ FREQUEN RULES ]===========================================================================================
+  const long Freq2Band[16][2] = {/*
+  Freq Hz from       to   Band number
+  */   {1810000,   2000000},  // #1 [160m]
+       {3500000,   3800000},  // #2  [80m]
+       {7000000,   7200000},  // #3  [40m]
+      {10100000,  10150000},  // #4  [30m]
+      {14000000,  14350000},  // #5  [20m]
+      {18068000,  18168000},  // #6  [17m]
+      {21000000,  21450000},  // #7  [15m]
+      {24890000,  24990000},  // #8  [12m]
+      {28000000,  29700000},  // #9  [10m]
+      {50000000,  52000000},  // #10  [6m]
+     {144000000, 146000000},  // #11  [2m]
+     {430000000, 440000000},  // #12  [70cm]
+     {1240000000, 1300000000},  // #13  [23cm]
+     {2300000000, 2450000000},  // #14  [13cm]
+     {3300000000, 3500000000},  // #15  [9cm]
+     {5650000000, 5850000000},  // #16  [6cm]
+  };
 
-//=====[ Sets band -->  to output in MATRIX table ]===========================================================
+  //=====[ Sets band -->  to output in MATRIX table ]===========================================================
 
-        const boolean matrix[17][16] = { /*
+          const boolean matrix[17][16] = { /*
 
-        Band 0 --> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  1 }, /* first eight shift register board
-\       Band 1 --> */ { 1,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
- \      Band 2 --> */ { 0,  1,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
-  \     Band 3 --> */ { 0,  0,  1,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
-   \    Band 4 --> */ { 0,  0,  0,  1,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
-    \   Band 5 --> */ { 0,  0,  0,  0,  1,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
-     \  Band 6 --> */ { 0,  0,  0,  0,  0,  1,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
-IN    ) Band 7 --> */ { 0,  0,  0,  0,  0,  0,  1,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
-     /  Band 8 --> */ { 0,  0,  0,  0,  0,  0,  0,  1,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+          Band 0 --> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  1 }, /* first eight shift register board
+  \       Band 1 --> */ { 1,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+   \      Band 2 --> */ { 0,  1,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+    \     Band 3 --> */ { 0,  0,  1,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+     \    Band 4 --> */ { 0,  0,  0,  1,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+      \   Band 5 --> */ { 0,  0,  0,  0,  1,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+       \  Band 6 --> */ { 0,  0,  0,  0,  0,  1,  0,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+  IN    ) Band 7 --> */ { 0,  0,  0,  0,  0,  0,  1,  0,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
+       /  Band 8 --> */ { 0,  0,  0,  0,  0,  0,  0,  1,    0,  0,  0,  0,  0,  0,  0,  0 }, /*
 
-    /   Band 9 --> */ { 0,  0,  0,  0,  0,  0,  0,  0,    1,  0,  0,  0,  0,  0,  0,  0 }, /* second eight shift register board
-   /    Band 10 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  1,  0,  0,  0,  0,  0,  0 }, /* (optional)
-  /     Band 11 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  1,  0,  0,  0,  0,  0 }, /*
- /      Band 12 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  1,  0,  0,  0,  0 }, /*
-/       Band 13 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  1,  0,  0,  0 }, /*
-        Band 14 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  1,  0,  0 }, /*
-        Band 15 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  1,  0 }, /*
-        Band 16 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  1 }, /*
-                        |   |   |   |   |   |   |   |     |   |   |   |   |   |   |   |
-                        V   V   V   V   V   V   V   V     V   V   V   V   V   V   V   V
-                     ----------------------------------  ---------------------------------
-                     |  1   2   3   4   5   6   7   8     9  10  11  12  13  14  15  16  |
-                     ----------------------------------  ---------------------------------
-                                                   OUTPUTS
-                                    (for second eight need aditional board)*/
-        };
+      /   Band 9 --> */ { 0,  0,  0,  0,  0,  0,  0,  0,    1,  0,  0,  0,  0,  0,  0,  0 }, /* second eight shift register board
+     /    Band 10 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  1,  0,  0,  0,  0,  0,  0 }, /* (optional)
+    /     Band 11 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  1,  0,  0,  0,  0,  0 }, /*
+   /      Band 12 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  1,  0,  0,  0,  0 }, /*
+  /       Band 13 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  1,  0,  0,  0 }, /*
+          Band 14 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  1,  0,  0 }, /*
+          Band 15 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  1,  0 }, /*
+          Band 16 -> */ { 0,  0,  0,  0,  0,  0,  0,  0,    0,  0,  0,  0,  0,  0,  0,  1 }, /*
+                          |   |   |   |   |   |   |   |     |   |   |   |   |   |   |   |
+                          V   V   V   V   V   V   V   V     V   V   V   V   V   V   V   V
+                       ----------------------------------  ---------------------------------
+                       |  1   2   3   4   5   6   7   8     9  10  11  12  13  14  15  16  |
+                       ----------------------------------  ---------------------------------
+                                                     OUTPUTS
+                                      (for second eight need aditional board)*/
+          };
 
-//=====[ BCD OUT ]===========================================================================================
+  //=====[ BCD OUT ]===========================================================================================
 
-        const boolean BCDmatrixOUT[4][16] = { /*
-        --------------------------------------------------------------------
-        Band # to output relay   0   1   2   3   4   5   6   7   8   9  10
-        (Yaesu BCD)                 160 80  40  30  20  17  15  12  10  6m
-        --------------------------------------------------------------------
-                                 |   |   |   |   |   |   |   |   |   |   |
-                                 V   V   V   V   V   V   V   V   V   V   V
-                            */ { 0,  1,  0,  1,  0,  1,  0,  1,  0,  1,  0, 1, 0, 1, 0, 1 }, /* --> DB25 Pin 11
-                            */ { 0,  0,  1,  1,  0,  0,  1,  1,  0,  0,  1, 1, 0, 0, 1, 1 }, /* --> DB25 Pin 24
-                            */ { 0,  0,  0,  0,  1,  1,  1,  1,  0,  0,  0, 0, 1, 1, 1, 1 }, /* --> DB25 Pin 12
-                            */ { 0,  0,  0,  0,  0,  0,  0,  0,  1,  1,  1, 1, 1, 1, 1, 1 }, /* --> DB25 Pin 25
-        */};
+          const boolean BCDmatrixOUT[4][16] = { /*
+          --------------------------------------------------------------------
+          Band # to output relay   0   1   2   3   4   5   6   7   8   9  10
+          (Yaesu BCD)                 160 80  40  30  20  17  15  12  10  6m
+          --------------------------------------------------------------------
+                                   |   |   |   |   |   |   |   |   |   |   |
+                                   V   V   V   V   V   V   V   V   V   V   V
+                              */ { 0,  1,  0,  1,  0,  1,  0,  1,  0,  1,  0, 1, 0, 1, 0, 1 }, /* --> DB25 Pin 11
+                              */ { 0,  0,  1,  1,  0,  0,  1,  1,  0,  0,  1, 1, 0, 0, 1, 1 }, /* --> DB25 Pin 24
+                              */ { 0,  0,  0,  0,  1,  1,  1,  1,  0,  0,  0, 0, 1, 1, 1, 1 }, /* --> DB25 Pin 12
+                              */ { 0,  0,  0,  0,  0,  0,  0,  0,  1,  1,  1, 1, 1, 1, 1, 1 }, /* --> DB25 Pin 25
+          */};
 
-//============================================================================================================
+  //============================================================================================================
 
-// #define UdpBroadcastDebug_debug
+  // #define UdpBroadcastDebug_debug
+#endif
 
 #if defined(LCD)
   #include <Wire.h>
@@ -217,25 +222,25 @@ IN    ) Band 7 --> */ { 0,  0,  0,  0,  0,  0,  1,  0,    0,  0,  0,  0,  0,  0,
   #endif
 
   long LcdRefresh[2]{0,500};
-  const char* ANTname[17] = {
-      "Out of band",  // Band 0 (no data)
-      "Dipole",       // Band 1
-      "Vertical",     // Band 2
-      "3el Yagi",     // Band 3
-      "Windom",       // Band 4
-      "DeltaLoop",    // Band 5
-      "20m Stack",    // Band 6
-      "DeltaLoop",    // Band 7
-      "HB9",          // Band 8
-      "Dipole",       // Band 9
-      "5el Yagi",     // Band 10
-      "7el Yagi",     // Band 11
-      "24el",         // Band 12
-      "20el quad",    // Band 13
-      "Dish 1.2m",    // Band 14
-      "Dish 1.2m",    // Band 15
-      "Dish 1m",      // Band 16
-  };
+  // const char* ANTname[17] = {
+  //     "Out of band",  // Band 0 (no data)
+  //     "Dipole",       // Band 1
+  //     "Vertical",     // Band 2
+  //     "3el Yagi",     // Band 3
+  //     "Windom",       // Band 4
+  //     "DeltaLoop",    // Band 5
+  //     "20m Stack",    // Band 6
+  //     "DeltaLoop",    // Band 7
+  //     "HB9",          // Band 8
+  //     "Dipole",       // Band 9
+  //     "5el Yagi",     // Band 10
+  //     "7el Yagi",     // Band 11
+  //     "24el",         // Band 12
+  //     "20el quad",    // Band 13
+  //     "Dish 1.2m",    // Band 14
+  //     "Dish 1.2m",    // Band 15
+  //     "Dish 1m",      // Band 16
+  // };
   // byte LockChar[8] = {0b00100, 0b01010, 0b01010, 0b11111, 0b11011, 0b11011, 0b11111, 0b00000};
   uint8_t LockChar[8] = {0x4,0xa,0xa,0x1f,0x1b,0x1b,0x1f,0x0};
   // byte EthChar[8] = {0b00000, 0b00000, 0b11111, 0b10001, 0b10001, 0b11011, 0b11111, 0b00000};
@@ -415,18 +420,18 @@ void setup() {
       TxUdpBuffer[0] = NET_ID;
   }
 
-  // 2-Set RX data
-  // Serial.print("Set RX data ");
-  // if(EEPROM.read(2)<2){
-  //   SET_RX_DATA = EEPROM.read(2);
-  // }else{
-  //   EEPROM.write(2, SET_RX_DATA);
-  // }
-  // if(SET_RX_DATA==1){
-  //   Serial.println("[ON]");
-  // }else{
-  //   Serial.println("[OFF]");
-  // }
+  // 2-PTT transfer
+  Serial.print("PTT transfer ");
+  if(EEPROM.read(2)<2){
+    PttTransfer = EEPROM.read(2);
+  }else{
+    EEPROM.write(2, PttTransfer);
+  }
+  if(PttTransfer==1){
+    Serial.println("[ON]");
+  }else{
+    Serial.println("[OFF]");
+  }
 
   // 3-HW_BCD_SW
   Serial.print("HW BCD");
@@ -564,6 +569,16 @@ void CheckNetId(){
     }
   }
 }
+//---------------------------------------------------------------------------------------------------------
+
+byte IdPrefix(byte ID){
+  bitClear(ID, 0);  // ->
+  bitClear(ID, 1);
+  bitClear(ID, 2);
+  bitClear(ID, 3);
+  ID = ID >> 4;
+  return(ID);
+}
 
 //---------------------------------------------------------------------------------------------------------
 
@@ -618,18 +633,21 @@ void SerialCLI(){
             }
             #endif
 
-        // // /
-        // }else if(incomingByte==47){
-        //     SET_RX_DATA = !SET_RX_DATA;
-        //     EEPROM.write(2, SET_RX_DATA);
-        //     Serial.print(F("** Set RX data "));
-        //     if(SET_RX_DATA==1){
-        //       Serial.println(F("ENABLE **"));
-        //     }else{
-        //       Serial.println(F("DISABLE **"));
-        //     }
+        // /
+        }else if(incomingByte==47){
+            PttTransfer = !PttTransfer;
+            EEPROM.write(2, PttTransfer);
+            // reinit ptt interrupt
+            InterruptON(0,1); // ptt, enc
+            InterruptON(1,1); // ptt, enc
+            Serial.print(F("** PTT trasfer "));
+            if(PttTransfer==1){
+              Serial.println(F("ENABLE **"));
+            }else{
+              Serial.println(F("DISABLE **"));
+            }
 
-          // ?
+        // ?
         }else if(incomingByte==63){
           ListCommands();
 
@@ -790,7 +808,15 @@ void ListCommands(){
       Serial.println(F("OFF]"));
     }
   #endif
-  Serial.println(F("      . IP list "));
+  Serial.print(F("      / PTT transfer"));
+  if(PttTransfer==1){
+    Serial.print(F(" as button number "));
+    Serial.print(ButtonUseForPttTransfer);
+    Serial.println(F(" [ON]"));
+  }else{
+    Serial.println(F(" [OFF]"));
+  }
+  Serial.println(F("      . Listing detected/stored ip-relay by ID sufix"));
   Serial.print("      + Net ID sufix by ");
     if(HW_BCD_SW==true){
       Serial.println("EEPROM/[BCD switch]");
@@ -798,25 +824,21 @@ void ListCommands(){
       Serial.println("[EEPROM]/BCD switch");
     }
     Serial.print("      # network ID prefix [");
-    byte ID = NET_ID;
-    bitClear(ID, 0); // ->
-    bitClear(ID, 1);
-    bitClear(ID, 2);
-    bitClear(ID, 3);
-    ID = ID >> 4;
-      Serial.print(ID, HEX);
-    Serial.print("] hex (identify for multi control)");
-    Serial.println();
+    Serial.print(IdPrefix(NET_ID), HEX);
+    if(SET_RX_DATA==1){
+      Serial.println("] hex, diffrent for each device in multi control");
+    }else{
+      Serial.println("] hex, expanded range of network ID");
+    }
+
     if(HW_BCD_SW==false){
-      ID = NET_ID;
-      bitClear(ID, 4);
-      bitClear(ID, 5);
-      bitClear(ID, 6);
-      bitClear(ID, 7); // <-
       Serial.print("        +network ID sufix [");
-      Serial.print(ID, HEX);
-      Serial.print("] hex");
-      Serial.println();
+      Serial.print(IdSufix(NET_ID), HEX);
+      if(SET_RX_DATA==1){
+        Serial.println("] hex, in multi control same, for all shared devices");
+      }else{
+        Serial.println("] hex, diffrent for each device");
+      }
     }
     Serial.println(F("  -----------------------------"));
 }
@@ -827,7 +849,11 @@ void InterruptON(int ptt, int enc){
   if(ptt==0){
     detachInterrupt(digitalPinToInterrupt(PttDetectorPin));
   }else if(ptt==1){
-    attachInterrupt(digitalPinToInterrupt(PttDetectorPin), PttDetector, FALLING);  // need detachInterrupt in RX_UDP() subroutine
+    if(PttTransfer==0){
+      attachInterrupt(digitalPinToInterrupt(PttDetectorPin), PttDetector, FALLING);
+    }else{
+      attachInterrupt(digitalPinToInterrupt(PttDetectorPin), PttDetectorTransfer, CHANGE);
+    }
   }
   if(enc==0){
     detachInterrupt(digitalPinToInterrupt(EncAShiftInPin));
@@ -1150,7 +1176,7 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
 
     // DATA
     }else{
-      if(DetectedRemoteSw[IdSufix(NET_ID)][4]!=0 && PTT==false){
+      if(DetectedRemoteSw[IdSufix(NET_ID)][4]!=0 && (PTT==false || PTT==true && PttTransfer==1) ){
         RemoteSwIP = DetectedRemoteSw[IdSufix(NET_ID)];
         RemoteSwPort = DetectedRemoteSw[IdSufix(NET_ID)][4];
         UdpCommand.beginPacket(RemoteSwIP, RemoteSwPort);
@@ -1263,7 +1289,9 @@ void RX_UDP(char FROM, char TO){
           lcd.clear();
           lcd.setCursor(0, 0);
           lcd.print(F("Detect SW #"));
-          lcd.print(packetBuffer[0], HEX);
+          lcd.print(IdPrefix(NET_ID), HEX);
+          lcd.print(IdSufix(NET_ID), HEX);
+          // lcd.print(packetBuffer[0], HEX);
           lcd.setCursor(0, 1);
           lcd.print(DetectedRemoteSw [hexToDecBy4bit(IdSufix(NET_ID))] [0]);
           // lcd.print(DetectedRemoteSw [hexToDecBy4bit(packetBuffer[0])] [0]);
@@ -1402,6 +1430,22 @@ void PttDetector(){   // call from interupt
   #endif
   PttTiming[0]=millis();
 }
+//---------------------------------------------------------------------------------------------------------
+
+void PttDetectorTransfer(){   // call from interupt
+  if(digitalRead(PttDetectorPin)==LOW){
+    PTT = true;
+    bitSet(rxShiftInButton[0], ButtonUseForPttTransfer-1);
+    TxUDP(ThisDevice, RemoteDevice, rxShiftInButton[0], rxShiftInButton[1], rxShiftInButton[2]);
+  }else{
+    PTT = false;
+    bitClear(rxShiftInButton[0], ButtonUseForPttTransfer-1);
+    TxUDP(ThisDevice, RemoteDevice, rxShiftInButton[0], rxShiftInButton[1], rxShiftInButton[2]);
+  }
+  #if defined(LCD)
+    LcdNeedRefresh = true;
+  #endif
+}
 //-------------------------------------------------------------------------------------------------------
 
 void EthernetCheck(){
@@ -1424,7 +1468,8 @@ void EthernetCheck(){
       lcd.clear();
       lcd.setCursor(1, 0);
       lcd.print(F("Net-ID: "));
-      lcd.print(NET_ID, HEX);
+      lcd.print(IdPrefix(NET_ID), HEX);
+      lcd.print(IdSufix(NET_ID), HEX);
       lcd.setCursor(1, 1);
       lcd.print(F("[DHCP-"));
       if(EnableDHCP==1){
@@ -1492,7 +1537,7 @@ unsigned char hexToDecBy4bit(unsigned char hex)
 //---------------------------------------------------------------------------------------------------------
 
 void PttOff(){
-  if(PTT==true && millis()-PttTiming[0] > PttTiming[1] && digitalRead(PttDetectorPin)==HIGH){
+  if(PTT==true && millis()-PttTiming[0] > PttTiming[1] && digitalRead(PttDetectorPin)==HIGH && PttTransfer==0){
 
   #if defined(EthModule)
     if(DetectedRemoteSw[IdSufix(NET_ID)][4]!=0 && RemoteSwLatencyAnsw==1){
@@ -1899,99 +1944,99 @@ void BandDecoderOutput(){
 }
 //---------------------------------------------------------------------------------------------------------
 
-void bandSET() {                                               // set outputs by BAND variable
-  if(BAND==0 && previousBAND != 0){    // deactivate PTT
-    digitalWrite(PttOffPin, HIGH);
-    PTT = true;
-    #if defined(LCD)
-      LcdNeedRefresh = true;
-    #endif
-  }
-
-
-  if((PTT==false && previousBAND != 0 ) || (PTT==true && previousBAND == 0)){
-    ShiftByte[0] = B00000000;
-    ShiftByte[1] = B00000000;
-
-    if(BAND > 0 && BAND < 9){
-      ShiftByte[0] = ShiftByte[0] | (1<<BAND-1);    // Set the n-th bit
-    }
-    if(BAND > 7 && BAND < 17){
-      ShiftByte[1] = ShiftByte[1] | (1<<BAND-9);    // Set the n-th bit
-    }
-    digitalWrite(ShiftOutLatchPin, LOW);    // ready for receive data
-    if(NumberOfBoards > 1){ shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, ShiftByte[1]); }
-                            shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, ShiftByte[0]);
-    digitalWrite(ShiftOutLatchPin, HIGH);    // switch to output pin
-
-      #if !defined(YAESU_BCD)
-          bcdOut();
-      #endif
-      #if defined(LCD)
-        LcdNeedRefresh = true;
-      #endif
-  }
-
-  #if defined(EthModule)
-    if(DetectedRemoteSw[IdSufix(NET_ID)][4]==0 || RemoteSwLatencyAnsw==0){
-      //  && millis() < RemoteSwLatency[0]+RemoteSwLatency[1]*5) ){
-      digitalWrite(PttOffPin, HIGH);
-      #if defined(UdpBroadcastDebug_debug)
-        TxBroadcastUdp("BandSet-" + String(DetectedRemoteSw[IdSufix(NET_ID)][4]) + "-" + String(RemoteSwLatencyAnsw) );
-      #endif
-      PTT = true;
-      #if defined(LCD)
-      LcdNeedRefresh = true;
-      #endif
-    }
-  #endif
-  TxUDP(ThisDevice, RemoteDevice, rxShiftInButton[0], rxShiftInButton[1], rxShiftInButton[2]);
-
-  previousBAND = BAND;
-  #if defined(WATCHDOG)
-    WatchdogTimeout[0] = millis();                   // set time mark
-  #endif
-}
+// void bandSET() {                                               // set outputs by BAND variable
+//   if(BAND==0 && previousBAND != 0){    // deactivate PTT
+//     digitalWrite(PttOffPin, HIGH);
+//     PTT = true;
+//     #if defined(LCD)
+//       LcdNeedRefresh = true;
+//     #endif
+//   }
+//
+//
+//   if((PTT==false && previousBAND != 0 ) || (PTT==true && previousBAND == 0)){
+//     ShiftByte[0] = B00000000;
+//     ShiftByte[1] = B00000000;
+//
+//     if(BAND > 0 && BAND < 9){
+//       ShiftByte[0] = ShiftByte[0] | (1<<BAND-1);    // Set the n-th bit
+//     }
+//     if(BAND > 7 && BAND < 17){
+//       ShiftByte[1] = ShiftByte[1] | (1<<BAND-9);    // Set the n-th bit
+//     }
+//     digitalWrite(ShiftOutLatchPin, LOW);    // ready for receive data
+//     if(NumberOfBoards > 1){ shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, ShiftByte[1]); }
+//                             shiftOut(ShiftOutDataPin, ShiftOutClockPin, LSBFIRST, ShiftByte[0]);
+//     digitalWrite(ShiftOutLatchPin, HIGH);    // switch to output pin
+//
+//       #if !defined(YAESU_BCD)
+//           bcdOut();
+//       #endif
+//       #if defined(LCD)
+//         LcdNeedRefresh = true;
+//       #endif
+//   }
+//
+//   #if defined(EthModule)
+//     if(DetectedRemoteSw[IdSufix(NET_ID)][4]==0 || RemoteSwLatencyAnsw==0){
+//       //  && millis() < RemoteSwLatency[0]+RemoteSwLatency[1]*5) ){
+//       digitalWrite(PttOffPin, HIGH);
+//       #if defined(UdpBroadcastDebug_debug)
+//         TxBroadcastUdp("BandSet-" + String(DetectedRemoteSw[IdSufix(NET_ID)][4]) + "-" + String(RemoteSwLatencyAnsw) );
+//       #endif
+//       PTT = true;
+//       #if defined(LCD)
+//       LcdNeedRefresh = true;
+//       #endif
+//     }
+//   #endif
+//   TxUDP(ThisDevice, RemoteDevice, rxShiftInButton[0], rxShiftInButton[1], rxShiftInButton[2]);
+//
+//   previousBAND = BAND;
+//   #if defined(WATCHDOG)
+//     WatchdogTimeout[0] = millis();                   // set time mark
+//   #endif
+// }
 //---------------------------------------------------------------------------------------------------------
 
-void remoteRelay() {
-    Serial.print(1);
-    Serial.print(',');
-    Serial.print(BAND, DEC);
-    Serial.print('\n');
-    Serial.flush();
-}
+// void remoteRelay() {
+//     Serial.print(1);
+//     Serial.print(',');
+//     Serial.print(BAND, DEC);
+//     Serial.print('\n');
+//     Serial.flush();
+// }
+// //---------------------------------------------------------------------------------------------------------
+//
+// void serialEcho() {
+//     Serial.print("<");
+//     Serial.print(BAND);
+//     Serial.print(",");
+//     Serial.print(freq);
+//     Serial.println(">");
+//     Serial.flush();
+// }
 //---------------------------------------------------------------------------------------------------------
 
-void serialEcho() {
-    Serial.print("<");
-    Serial.print(BAND);
-    Serial.print(",");
-    Serial.print(freq);
-    Serial.println(">");
-    Serial.flush();
-}
+// #if !defined(YAESU_BCD)
+//     void bcdOut(){
+//         if (BCDmatrixOUT[0][BAND] == 1){ digitalWrite(BcdIn1Pin, HIGH); }else{ digitalWrite(BcdIn1Pin, LOW);}
+//         if (BCDmatrixOUT[1][BAND] == 1){ digitalWrite(BcdIn2Pin, HIGH); }else{ digitalWrite(BcdIn2Pin, LOW);}
+//         if (BCDmatrixOUT[2][BAND] == 1){ digitalWrite(BcdIn3Pin, HIGH); }else{ digitalWrite(BcdIn3Pin, LOW);}
+//         if (BCDmatrixOUT[3][BAND] == 1){ digitalWrite(BcdIn4Pin, HIGH); }else{ digitalWrite(BcdIn4Pin, LOW);}
+//     }
+// #endif
 //---------------------------------------------------------------------------------------------------------
 
-#if !defined(YAESU_BCD)
-    void bcdOut(){
-        if (BCDmatrixOUT[0][BAND] == 1){ digitalWrite(BcdIn1Pin, HIGH); }else{ digitalWrite(BcdIn1Pin, LOW);}
-        if (BCDmatrixOUT[1][BAND] == 1){ digitalWrite(BcdIn2Pin, HIGH); }else{ digitalWrite(BcdIn2Pin, LOW);}
-        if (BCDmatrixOUT[2][BAND] == 1){ digitalWrite(BcdIn3Pin, HIGH); }else{ digitalWrite(BcdIn3Pin, LOW);}
-        if (BCDmatrixOUT[3][BAND] == 1){ digitalWrite(BcdIn4Pin, HIGH); }else{ digitalWrite(BcdIn4Pin, LOW);}
-    }
-#endif
-//---------------------------------------------------------------------------------------------------------
-
-void watchDog() {
-  #if defined(WATCHDOG)
-    if((millis() - WatchdogTimeout[0]) > WatchdogTimeout[1]) {
-      BAND=0;
-      freq=0;
-      bandSET();                                 // set outputs
-    }
-  #endif
-}
+// void watchDog() {
+//   #if defined(WATCHDOG)
+//     if((millis() - WatchdogTimeout[0]) > WatchdogTimeout[1]) {
+//       BAND=0;
+//       freq=0;
+//       bandSET();                                 // set outputs
+//     }
+//   #endif
+// }
 //---------------------------------------------------------------------------------------------------------
 
 #if defined(ICOM_CIV) || defined(ICOM_CIV_OUT)
@@ -2063,17 +2108,17 @@ void watchDog() {
     //---------------------------------------------------------------------------------------------------------
 #endif
 
-void FreqToBandRules(){
-         if (freq >=Freq2Band[0][0] && freq <=Freq2Band[0][1] )  {BAND=1;}  // 160m
-    else if (freq >=Freq2Band[1][0] && freq <=Freq2Band[1][1] )  {BAND=2;}  //  80m
-    else if (freq >=Freq2Band[2][0] && freq <=Freq2Band[2][1] )  {BAND=3;}  //  40m
-    else if (freq >=Freq2Band[3][0] && freq <=Freq2Band[3][1] )  {BAND=4;}  //  30m
-    else if (freq >=Freq2Band[4][0] && freq <=Freq2Band[4][1] )  {BAND=5;}  //  20m
-    else if (freq >=Freq2Band[5][0] && freq <=Freq2Band[5][1] )  {BAND=6;}  //  17m
-    else if (freq >=Freq2Band[6][0] && freq <=Freq2Band[6][1] )  {BAND=7;}  //  15m
-    else if (freq >=Freq2Band[7][0] && freq <=Freq2Band[7][1] )  {BAND=8;}  //  12m
-    else if (freq >=Freq2Band[8][0] && freq <=Freq2Band[8][1] )  {BAND=9;}  //  10m
-    else if (freq >=Freq2Band[9][0] && freq <=Freq2Band[9][1] ) {BAND=10;}  //   6m
-    else if (freq >=Freq2Band[10][0] && freq <=Freq2Band[10][1] ) {BAND=11;}  //   2m
-    else {BAND=0;}                                                // out of range
-}
+// void FreqToBandRules(){
+//          if (freq >=Freq2Band[0][0] && freq <=Freq2Band[0][1] )  {BAND=1;}  // 160m
+//     else if (freq >=Freq2Band[1][0] && freq <=Freq2Band[1][1] )  {BAND=2;}  //  80m
+//     else if (freq >=Freq2Band[2][0] && freq <=Freq2Band[2][1] )  {BAND=3;}  //  40m
+//     else if (freq >=Freq2Band[3][0] && freq <=Freq2Band[3][1] )  {BAND=4;}  //  30m
+//     else if (freq >=Freq2Band[4][0] && freq <=Freq2Band[4][1] )  {BAND=5;}  //  20m
+//     else if (freq >=Freq2Band[5][0] && freq <=Freq2Band[5][1] )  {BAND=6;}  //  17m
+//     else if (freq >=Freq2Band[6][0] && freq <=Freq2Band[6][1] )  {BAND=7;}  //  15m
+//     else if (freq >=Freq2Band[7][0] && freq <=Freq2Band[7][1] )  {BAND=8;}  //  12m
+//     else if (freq >=Freq2Band[8][0] && freq <=Freq2Band[8][1] )  {BAND=9;}  //  10m
+//     else if (freq >=Freq2Band[9][0] && freq <=Freq2Band[9][1] ) {BAND=10;}  //   6m
+//     else if (freq >=Freq2Band[10][0] && freq <=Freq2Band[10][1] ) {BAND=11;}  //   2m
+//     else {BAND=0;}                                                // out of range
+// }
