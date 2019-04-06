@@ -38,6 +38,7 @@ Features:
 
   Changelog
   ---------
+  2019-04 - group button support (idea TNX SM0MDG)
   2019-03 - redesign CLI
           - multi control support (idea TNX SM0MDG)
           - PTT trasfer as one button
@@ -53,7 +54,7 @@ Features:
   - select ID by band decoder
   - encoder show ANT fullname
 */
-const char* REV = "20190329";
+const char* REV = "20190406";
 
 //=====[ Settings ]===========================================================================================
 
@@ -110,6 +111,7 @@ byte ButtonUseForPttTransfer= 8;  // 1-8
 bool HW_BCD_SW = 0;              // enable hardware ID board bcd switch (disable if not installed)
 bool SET_RX_DATA = 0;         // multi control
 bool Need_SET_RX_DATA = 1;
+bool GroupButton;             // group button
 bool DEBUG = 1;
 long HW_BCD_SWTimer[2]{0,3000};
 int NumberOfEncoderOutputs = 8;  // 2-16
@@ -1108,7 +1110,8 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
     // TxUdpBuffer[0] = NET_ID;
     TxUdpBuffer[1] = FROM;
     TxUdpBuffer[2] = TO;
-    TxUdpBuffer[3] = B00111010;           // :
+    TxUdpBuffer[3] = B00000000;           // :
+    // TxUdpBuffer[3] = B00111010;           // :
     TxUdpBuffer[4] = A;
     TxUdpBuffer[5] = B;
     TxUdpBuffer[6] = C;
@@ -1258,16 +1261,21 @@ void RX_UDP(char FROM, char TO){
         // && packetBuffer[2]== 'm'  // TO
         && packetBuffer[1]== FROM
         && packetBuffer[2]== TO
-        && (packetBuffer[3]== ':' || packetBuffer[3]== '-')
+        && packetBuffer[3]<4  // B000000??
+        // && (packetBuffer[3]== ':' || packetBuffer[3]== '-')
         && packetBuffer[7]== ';'
       ){
         RemoteSwLatency[1] = (millis()-RemoteSwLatency[0])/2; // set latency (half path in ms us/2/1000)
         RemoteSwLatencyAnsw = 1;           // answer packet received
-        if(packetBuffer[3]== ':'){
-          SET_RX_DATA=0;    // set multi control
-        }else if(packetBuffer[3]== '-'){
-          SET_RX_DATA=1;    // set multi control
-        }
+
+        SET_RX_DATA=bitRead(packetBuffer[3], 0);    // set multi control
+        // if(packetBuffer[3]== ':'){
+        //   SET_RX_DATA=0;    // set multi control
+        // }else if(packetBuffer[3]== '-'){
+        //   SET_RX_DATA=1;    // set multi control
+        // }
+
+        GroupButton=bitRead(packetBuffer[3], 1);    // set group button
 
         // RX Broadcast / CFM
         if((packetBuffer[4]== 'b' && packetBuffer[5]== 'r') // && packetBuffer[6]== 'o')
@@ -1403,6 +1411,10 @@ void RX_UDP(char FROM, char TO){
             if(Need_SET_RX_DATA==1){
               Need_SET_RX_DATA=0;
             }
+          }
+          // group button bit
+          if(GroupButton==true && rxShiftInButton[0]!=packetBuffer[4]){
+            rxShiftInButton[0]=packetBuffer[4];
           }
           LcdNeedRefresh = true;
         } // else (rx data) end
