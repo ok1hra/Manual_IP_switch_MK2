@@ -635,6 +635,10 @@ void SerialCLI(){
             }
             #endif
 
+        // &
+        }else if(incomingByte==38){
+          TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
+
         // /
         }else if(incomingByte==47){
             PttTransfer = !PttTransfer;
@@ -791,6 +795,10 @@ void ListCommands(){
   Serial.print(RemoteSwIP);
   Serial.print(F(":"));
   Serial.println(RemoteSwPort);
+  Serial.print(F("  Broadcast IP: "));
+  Serial.print(BroadcastIP);
+  Serial.print(F(":"));
+  Serial.println(BroadcastPort);
   Serial.print(F("  Encoder range: "));
   Serial.println(NumberOfEncoderOutputs);
   Serial.print(F("  Set RX data (multi control) "));
@@ -842,6 +850,7 @@ void ListCommands(){
         Serial.println("] hex, diffrent for each device");
       }
     }
+    Serial.println("      &  send broadcast packet");
     Serial.println(F("  -----------------------------"));
 }
 
@@ -1153,7 +1162,8 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
       }
 
       // broadcast
-      BroadcastIP = ~Ethernet.subnetMask() | Ethernet.gatewayIP();
+      BroadcastIP = ~Ethernet.subnetMask() | Ethernet.localIP();    // SQ5M tip
+      // BroadcastIP = ~Ethernet.subnetMask() | Ethernet.gatewayIP();
       UdpCommand.beginPacket(BroadcastIP, BroadcastPort);   // Send to IP and port from recived UDP command
         UdpCommand.write(TxUdpBuffer, sizeof(TxUdpBuffer));   // send buffer
       UdpCommand.endPacket();
