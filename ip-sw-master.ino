@@ -38,6 +38,7 @@ Features:
 
   Changelog
   ---------
+  2019-06 - manual set remote relay IP and storage to eeprom for restore after restart
   2019-04 - group button support (idea TNX SM0MDG)
   2019-03 - redesign CLI
           - multi control support (idea TNX SM0MDG)
@@ -54,7 +55,7 @@ Features:
   - select ID by band decoder
   - encoder show ANT fullname
 */
-const char* REV = "20190406";
+const char* REV = "20190605";
 
 //=====[ Settings ]===========================================================================================
 
@@ -66,24 +67,25 @@ const char* REV = "20190406";
 // #define FastBoot              // Enable fast power up, without shown LCD information
 
 // You can set remote relay IP address, from outside local network
-byte DetectedRemoteSw[16][5]{
-  {0,0,0,0, 0},   // IP:port ID 0
-  {0,0,0,0, 0},   // IP:port ID 1
-  {0,0,0,0, 0},   // IP:port ID 2
-  {0,0,0,0, 0},   // IP:port ID 3
-  {0,0,0,0, 0},   // IP:port ID 4
-  {0,0,0,0, 0},   // IP:port ID 5
-  {0,0,0,0, 0},   // IP:port ID 6
-  {78,111,124,210, 88},   // IP:port ID 7 - remoteqth test point
-  {0,0,0,0, 0},   // IP:port ID 8
-  {0,0,0,0, 0},   // IP:port ID 9
-  {0,0,0,0, 0},   // IP:port ID A
-  {0,0,0,0, 0},   // IP:port ID B
-  {0,0,0,0, 0},   // IP:port ID C
-  {0,0,0,0, 0},   // IP:port ID D
-  {0,0,0,0, 0},   // IP:port ID E
-  {0,0,0,0, 0},   // IP:port ID F
-};
+byte DetectedRemoteSw[16][5];
+// {
+//   {0,0,0,0, 0},   // IP:port ID 0
+//   {0,0,0,0, 0},   // IP:port ID 1
+//   {0,0,0,0, 0},   // IP:port ID 2
+//   {0,0,0,0, 0},   // IP:port ID 3
+//   {0,0,0,0, 0},   // IP:port ID 4
+//   {0,0,0,0, 0},   // IP:port ID 5
+//   {0,0,0,0, 0},   // IP:port ID 6
+//   {78,111,124,210, 88},   // IP:port ID 7 - remoteqth test point
+//   {0,0,0,0, 0},   // IP:port ID 8
+//   {0,0,0,0, 0},   // IP:port ID 9
+//   {0,0,0,0, 0},   // IP:port ID A
+//   {0,0,0,0, 0},   // IP:port ID B
+//   {0,0,0,0, 0},   // IP:port ID C
+//   {0,0,0,0, 0},   // IP:port ID D
+//   {0,0,0,0, 0},   // IP:port ID E
+//   {0,0,0,0, 0},   // IP:port ID F
+// };
 //==================================================================================================
 
 //=====[ OBSOLETE ]=============================================================================================
@@ -277,8 +279,8 @@ long EthLinkStatusTimer[2]{1500,1000};
   IPAddress gateway(192, 168, 1, 200);    // GATE
   IPAddress subnet(255, 255, 255, 0);     // MASK
   IPAddress myDns(8, 8, 8, 8);            // DNS (google pub)
-  EthernetServer server(80);              // Web server PORT
-  String HTTP_req;
+  // EthernetServer server(80);              // Web server PORT
+  // String HTTP_req;
 
   unsigned int UdpCommandPort = 88;       // local UDP port listen to command
   #define UDP_TX_PACKET_MAX_SIZE 40       // MIN 30
@@ -423,25 +425,32 @@ void setup() {
   }
 
   // 2-PTT transfer
-  Serial.print("PTT transfer ");
+  Serial.print(F("PTT transfer "));
   if(EEPROM.read(2)<2){
     PttTransfer = EEPROM.read(2);
   }else{
     EEPROM.write(2, PttTransfer);
   }
   if(PttTransfer==1){
-    Serial.println("[ON]");
+    Serial.println(F("[ON]"));
   }else{
-    Serial.println("[OFF]");
+    Serial.println(F("[OFF]"));
   }
 
   // 3-HW_BCD_SW
-  Serial.print("HW BCD");
+  Serial.print(F("NET-ID red from ["));
   if(EEPROM.read(3)<2){
     HW_BCD_SW = EEPROM.read(3);
-    Serial.println(" read from EEPROM");
+    Serial.println(F("EEPROM]"));
   }else{
-    Serial.println(" set to OFF");
+    Serial.println(F("BCD switch]"));
+  }
+
+  // 4-84 IP address
+  for (int i = 0; i < 16; i++) {
+    for (int j=0; j<5; j++) {
+      DetectedRemoteSw[i][j]=EEPROM.read(i*5+j+4);
+    }
   }
 
   pinMode(EncBPin, INPUT);
@@ -479,7 +488,7 @@ void setup() {
       }
       #if defined(LCD)
         lcd.setCursor(1, 0);
-        lcd.print("Version");
+        lcd.print(F("Version"));
         lcd.setCursor(1, 1);
         lcd.print(REV);
         // delay(350);  // 350 is max, then eth not initialize
@@ -525,6 +534,7 @@ void loop() {
 }
 
 // SUBROUTINES ---------------------------------------------------------------------------------------------------------
+#if defined(DUMMY)
 
 void ShiftOutTest(){
 
@@ -539,6 +549,7 @@ void ShiftOutTest(){
     delay(500);
   }
 }
+#endif
 //---------------------------------------------------------------------------------------------------------
 void CheckNetId(){
   if (HW_BCD_SW==true){
@@ -552,17 +563,17 @@ void CheckNetId(){
         TxUdpBuffer[0] = NET_ID;
         EEPROM.write(1, NET_ID); // address, value
         // EEPROM.commit();
-        Serial.print("** Now NET-ID change to 0x");
+        Serial.print(F("** Now NET-ID change to 0x"));
         if(NET_ID <=0x0f){
           Serial.print(F("0"));
         }
         Serial.print(NET_ID, HEX);
-        Serial.println(" **");
+        Serial.println(F(" **"));
         #if defined(SERIAL_debug)
           if(DEBUG==1){
-            Serial.print("EEPROM read [");
+            Serial.print(F("EEPROM read ["));
             Serial.print(EEPROM.read(1));
-            Serial.println("]");
+            Serial.println(F("]"));
           }
         #endif
         TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
@@ -599,28 +610,33 @@ void SerialCLI(){
 
       // .
       if(incomingByte==46){
-          Serial.print(F("RX ["));
-          Serial.print(packetBuffer[0], HEX);
-          for(int i=1; i<8; i++){
-            Serial.print(char(packetBuffer[i]));
-          }
-          Serial.print(F("] "));
-          Serial.print(UdpCommand.remoteIP());
-          Serial.print(":");
-          Serial.println(UdpCommand.remotePort());
+          // Serial.print(F("RX ["));
+          // Serial.print(packetBuffer[0], HEX);
+          // for(int i=1; i<8; i++){
+          //   Serial.print(char(packetBuffer[i]));
+          // }
+          // Serial.print(F("] "));
+          // Serial.print(UdpCommand.remoteIP());
+          // Serial.print(F(":"));
+          // Serial.println(UdpCommand.remotePort());
           Serial.println(F("List detected switch by ID sufix"));
           for (int i = 0; i < 16; i++) {
             Serial.print(i, HEX);
-            Serial.print(F("  "));
-            Serial.print(DetectedRemoteSw [i] [0]);
-            Serial.print(F("."));
-            Serial.print(DetectedRemoteSw [i] [1]);
-            Serial.print(F("."));
-            Serial.print(DetectedRemoteSw [i] [2]);
-            Serial.print(F("."));
-            Serial.print(DetectedRemoteSw [i] [3]);
-            Serial.print(F(":"));
-            Serial.println(DetectedRemoteSw [i] [4]);
+            if(i==IdSufix(NET_ID)){
+              Serial.print(F(" >"));
+            }else{
+              Serial.print(F("  "));
+            }
+            for (int j=0; j<5; j++) {
+              Serial.print(DetectedRemoteSw [i] [j]);
+              if(j<3){
+                Serial.print(F("."));
+              }else if(j==3){
+                Serial.print(F(":"));
+              }else if(j==4){
+                Serial.println();
+              }
+            }
           }
 
         // *
@@ -657,10 +673,40 @@ void SerialCLI(){
         }else if(incomingByte==63){
           ListCommands();
 
+          // @
+        }else if(incomingByte==64){
+          for (int i=0; i<5; i++){
+              if(i<4){
+                Serial.print(F("Press number (0-255) for part "));
+                Serial.print(i+1);
+                Serial.println(F(" and wait"));
+              }else{
+                Serial.println(F("Press IP port (1-65535) and wait"));
+              }
+              Serial.print(F("> "));
+              while(!Serial.available()) {
+              }
+              delay(1000);
+                int CompareInt = Serial.parseInt();
+                if( (i<4 && CompareInt>=0 && CompareInt<=255) || (i==4 && CompareInt>=1 && CompareInt<=65535) ){
+                  Serial.println(CompareInt);
+                  DetectedRemoteSw[IdSufix(NET_ID)][i] = CompareInt;
+                  if(i==4){
+                    for (int j=0; j<5; j++) {
+                      EEPROM.write(IdSufix(NET_ID)*5+j+4, DetectedRemoteSw[IdSufix(NET_ID)][j]);
+                    }
+                    Serial.println(F("Change OK and save to EEPROM"));
+                    TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
+                  }
+                }else{
+                  Serial.print(F("Out of range."));
+                  break;
+                }
+            }
           // #
           }else if(incomingByte==35){
-                Serial.println("Press NET-ID X_ prefix 0-f...");
-              Serial.print("> ");
+                Serial.println(F("Press NET-ID prefix (0-f)"));
+              Serial.print(F("> "));
               while (Serial.available() == 0) {
                 // Wait
               }
@@ -687,8 +733,8 @@ void SerialCLI(){
                   }
                 // sufix
                 if(HW_BCD_SW==false){
-                    Serial.println("Press NET-ID _X sufix 0-f...");
-                    Serial.print("> ");
+                    Serial.println(F("Press NET-ID sufix (0-f)"));
+                    Serial.print(F("> "));
                     while (Serial.available() == 0) {
                       // Wait
                     }
@@ -713,17 +759,17 @@ void SerialCLI(){
                 // #endif
                     EEPROM.write(1, NET_ID); // address, value
                     // EEPROM.commit();
-                    Serial.print("** Now NET-ID change to 0x");
+                    Serial.print(F("** Now NET-ID change to 0x"));
                     if(NET_ID <=0x0f){
                       Serial.print(F("0"));
                     }
                     Serial.print(NET_ID, HEX);
-                    Serial.println(" **");
+                    Serial.println(F(" **"));
                     #if defined(SERIAL_debug)
                       if(DEBUG==1){
-                        Serial.print("EEPROM read [");
+                        Serial.print(F("EEPROM read ["));
                         Serial.print(EEPROM.read(1), HEX);
-                        Serial.println("]");
+                        Serial.println(F("]"));
                       }
                     #endif
                     TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
@@ -732,23 +778,23 @@ void SerialCLI(){
                     // }
                 // #if !defined(HW_BCD_SW)
                   }else{
-                    Serial.println(" accepts 0-f, exit");
+                    Serial.println(F(" accepts 0-f, exit"));
                   }
                 // #endif
                 }
               }else{
-                Serial.println(" accepts 0-f, exit");
+                Serial.println(F(" accepts 0-f, exit"));
               }
 
 
           // +
           }else if(incomingByte==43){
               HW_BCD_SW=!HW_BCD_SW;
-              Serial.print("** Net ID sufix by ");
+              Serial.print(F("** Net ID sufix by "));
               EEPROM.write(3, HW_BCD_SW);
               // EEPROM.commit();
               if(HW_BCD_SW==true){
-                Serial.println("EEPROM/[BCD switch] **");
+                Serial.println(F("EEPROM/[BCD switch] **"));
                 bitClear(NET_ID, 0);
                 bitClear(NET_ID, 1);
                 bitClear(NET_ID, 2);
@@ -758,13 +804,13 @@ void SerialCLI(){
               }else{
                 NET_ID = EEPROM.read(1);
                 TxUdpBuffer[0] = NET_ID;
-                Serial.println("[EEPROM]/BCD switch **");
+                Serial.println(F("[EEPROM]/BCD switch **"));
               }
 
           }else{
             Serial.print(F(" ["));
             Serial.write(incomingByte); //, DEC);
-            Serial.println(F("] unknown command - for more info press 'h'"));
+            Serial.println(F("] unknown command - for more info press '?'"));
             ListCommands();
           }
   }
@@ -772,35 +818,33 @@ void SerialCLI(){
 //---------------------------------------------------------------------------------------------------------
 void ListCommands(){
   Serial.println();
-  Serial.println(F("  =========================="));
-  Serial.print(F("   IP SW MASTER NET ID: 0x"));
+  Serial.println(F("  ==========================="));
+  Serial.print(F("   IP SW MASTER NET-ID: 0x"));
   if(NET_ID <=0x0f){
     Serial.print(F("0"));
   }
   Serial.print(NET_ID, HEX);
   if(HW_BCD_SW==true){
-    Serial.print(" [BCD-");
+    Serial.print(F(" [BCD-"));
     Serial.print(digitalRead(Id1Pin));
     Serial.print(digitalRead(Id2Pin));
     Serial.print(digitalRead(Id3Pin));
-    Serial.print("]");
+    Serial.print(F("]"));
   }
-    Serial.println();
-  Serial.println(F("  =========================="));
+    Serial.println(" <- ip-relay must preset the same ID@");
+  Serial.println(F("  ==========================="));
   Serial.print(F("  Version: "));
   Serial.println(REV);
   Serial.print(F("  IP address:"));
   Serial.println(Ethernet.localIP());
-  Serial.print(F("  IP switch: "));
-  Serial.print(RemoteSwIP);
-  Serial.print(F(":"));
-  Serial.println(RemoteSwPort);
   Serial.print(F("  Broadcast IP: "));
   Serial.print(BroadcastIP);
   Serial.print(F(":"));
   Serial.println(BroadcastPort);
   Serial.print(F("  Encoder range: "));
   Serial.println(NumberOfEncoderOutputs);
+  Serial.print(F("  LCD I2C address: 0x"));
+  Serial.println(LcdI2Caddress, HEX);
   Serial.print(F("  Set RX data (multi control) "));
   if(SET_RX_DATA==1){
     Serial.println(F("[ON]"));
@@ -809,15 +853,38 @@ void ListCommands(){
   }
 
   Serial.println(F("  -----------------------------"));
-  Serial.println(F("      ? for info"));
-  #if defined(SERIAL_debug)
-    Serial.print(F("      * serial debug ["));
-    if(DEBUG==1){
-      Serial.println(F("ON]"));
+  Serial.print(F("      # network ID prefix ["));
+  Serial.print(IdPrefix(NET_ID), HEX);
+  if(SET_RX_DATA==1){
+    Serial.println(F("] hex, diffrent for each device in multi control"));
+  }else{
+    Serial.println(F("] hex, expanded range of network ID"));
+  }
+
+  if(HW_BCD_SW==false){
+    Serial.print(F("        +network ID sufix ["));
+    Serial.print(IdSufix(NET_ID), HEX);
+    if(SET_RX_DATA==1){
+      Serial.println(F("] hex, in multi control same, for all shared devices"));
     }else{
-      Serial.println(F("OFF]"));
+      Serial.println(F("] hex, diffrent for each device"));
     }
-  #endif
+  }
+  Serial.print(F("      @ Manual change Remote relay IP ["));
+  for (int j=0; j<5; j++) {
+    Serial.print(DetectedRemoteSw [IdSufix(NET_ID)] [j]);
+    if(j<3){
+      Serial.print(F("."));
+    }else if(j==3){
+      Serial.print(F(":"));
+    }else if(j==4){
+      Serial.println(F("]"));
+    }
+  }
+  Serial.print(F("        for actual NET-ID sufix ["));
+  Serial.print(IdSufix(NET_ID), HEX);
+  Serial.println(F("]"));
+  Serial.println(F("      . Listing detected/stored ip-relay by ID sufix"));
   Serial.print(F("      / PTT transfer"));
   if(PttTransfer==1){
     Serial.print(F(" as button number "));
@@ -826,31 +893,22 @@ void ListCommands(){
   }else{
     Serial.println(F(" [OFF]"));
   }
-  Serial.println(F("      . Listing detected/stored ip-relay by ID sufix"));
-  Serial.print("      + Net ID sufix by ");
+  Serial.print(F("      + Net ID sufix by "));
     if(HW_BCD_SW==true){
-      Serial.println("EEPROM/[BCD switch]");
+      Serial.println(F("EEPROM/[BCD switch]"));
     }else{
-      Serial.println("[EEPROM]/BCD switch");
+      Serial.println(F("[EEPROM]/BCD switch"));
     }
-    Serial.print("      # network ID prefix [");
-    Serial.print(IdPrefix(NET_ID), HEX);
-    if(SET_RX_DATA==1){
-      Serial.println("] hex, diffrent for each device in multi control");
-    }else{
-      Serial.println("] hex, expanded range of network ID");
-    }
-
-    if(HW_BCD_SW==false){
-      Serial.print("        +network ID sufix [");
-      Serial.print(IdSufix(NET_ID), HEX);
-      if(SET_RX_DATA==1){
-        Serial.println("] hex, in multi control same, for all shared devices");
+    #if defined(SERIAL_debug)
+      Serial.print(F("      * serial debug ["));
+      if(DEBUG==1){
+        Serial.println(F("ON]"));
       }else{
-        Serial.println("] hex, diffrent for each device");
+        Serial.println(F("OFF]"));
       }
-    }
-    Serial.println("      &  send broadcast packet");
+    #endif
+    Serial.println(F("      & send broadcast packet"));
+    Serial.println(F("      ? for info"));
     Serial.println(F("  -----------------------------"));
 }
 
@@ -996,9 +1054,9 @@ void LcdDisplay(){
             lcd.noBacklight();
           #endif
           lcd.setCursor(0,0);
-          lcd.print("Intermediate    ");
+          lcd.print(F("Intermediate    "));
           lcd.setCursor(0,1);
-          lcd.print("position!");
+          lcd.print(F("position!"));
           delay(200);
           #if defined(LCD_PCF8574T) || defined(LCD_PCF8574)
             lcd.setBacklight(1);
@@ -1010,7 +1068,7 @@ void LcdDisplay(){
           int PositionCounter = 0;
           lcd.setCursor(0,0);
           for (int i=0; i<LcdSpace; i++){
-            lcd.print(" ");
+            lcd.print(F(" "));
             PositionCounter++;
           }
           // Encoder
@@ -1033,7 +1091,7 @@ void LcdDisplay(){
             PositionCounter++;
           }
           for (int i=PositionCounter; i<16; i++){
-            lcd.print(" ");
+            lcd.print(F(" "));
           }
           // Keyboard
           for (int i=0; i<8; i++){
@@ -1051,7 +1109,7 @@ void LcdDisplay(){
             // lcd.write(byte(0));        // Lock icon
             lcd.print((char)0);
           }else{
-            lcd.print("|");
+            lcd.print(F("|"));
           }
         }
 
@@ -1060,19 +1118,19 @@ void LcdDisplay(){
             // lcd.print("*");
             lcd.print((char)1);   // EthChar
           }else if(RemoteSwLatencyAnsw==0 && millis() < RemoteSwLatency[0]+2000){
-              lcd.print(" ");
+              lcd.print(F(" "));
           }else{
-            lcd.print("!");
+            lcd.print(F("!"));
           }
         }else{
-          lcd.print("x");
+          lcd.print(F("x"));
         }
         if(SET_RX_DATA==1){
-          lcd.print("m");
+          lcd.print(F("m"));
         }else{
-          lcd.print(" ");
+          lcd.print(F(" "));
         }
-        lcd.print("ID-");
+        lcd.print(F("ID-"));
         if(NET_ID < 0x0f){
           lcd.print(F("0"));
         }
@@ -1155,7 +1213,7 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
                 Serial.print(char(TxUdpBuffer[i]));
                 // Serial.print(F(" "));
               }
-              Serial.println("]");
+              Serial.println(F("]"));
             }
           #endif
         }
@@ -1183,7 +1241,7 @@ void TxUDP(byte FROM, byte TO, byte A, byte B, byte C){
               Serial.print(char(TxUdpBuffer[i]));
               // Serial.print(F(" "));
             }
-            Serial.println("]");
+            Serial.println(F("]"));
           }
         #endif
 
@@ -1260,7 +1318,7 @@ void RX_UDP(char FROM, char TO){
           }
           Serial.print(F(" "));
           Serial.print(UdpCommand.remoteIP());
-          Serial.print(":");
+          Serial.print(F(":"));
           Serial.print(UdpCommand.remotePort());
           Serial.println();
         }
@@ -1348,7 +1406,7 @@ void RX_UDP(char FROM, char TO){
             }
             Serial.print(F("] "));
             Serial.print(UdpCommand.remoteIP());
-            Serial.print(":");
+            Serial.print(F(":"));
             Serial.println(UdpCommand.remotePort());
             for (int i = 0; i < 16; i++) {
               Serial.print(i, HEX);
@@ -1391,7 +1449,7 @@ void RX_UDP(char FROM, char TO){
               Serial.print((byte)packetBuffer[6], BIN);
               Serial.print(F(";] "));
               Serial.print(UdpCommand.remoteIP());
-              Serial.print(":");
+              Serial.print(F(":"));
               Serial.print(UdpCommand.remotePort());
               Serial.print(F(" Latency: "));
               Serial.println(RemoteSwLatency[1]);
@@ -1526,7 +1584,7 @@ void EthernetCheck(){
       #endif
         lcd.clear();
 
-      server.begin();                     // Web
+      // server.begin();                     // Web
       UdpCommand.begin(UdpCommandPort);   // UDP
       TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
     }
@@ -1582,6 +1640,7 @@ void PttOff(){
 }
 
 //---------------------------------------------------------------------------------------------------------
+#if defined(DUMMY)
 
 void FrequencyRequest(){
   if(REQUEST > 0 && (millis() - RequestTimeout[0] > RequestTimeout[1])){
@@ -1591,13 +1650,15 @@ void FrequencyRequest(){
     #endif
 
     #if defined(KENWOOD_PC)
-          Serial.print("IF;");
+          Serial.print(F("IF;"));
           Serial.flush();       // Waits for the transmission of outgoing serial data to complete
     #endif
     RequestTimeout[0]=millis();
   }
 }
+#endif
 //---------------------------------------------------------------------------------------------------------
+#if defined(DUMMY)
 
 #if defined(LCD)
   void Space(int MAX, int LENGHT, char CHARACTER){
@@ -1609,7 +1670,9 @@ void FrequencyRequest(){
     }
   }
 #endif
+#endif
 //---------------------------------------------------------------------------------------------------------
+#if defined(DUMMY)
 
 #if defined(LCD)
   void PrintFreq(){
@@ -1624,8 +1687,9 @@ void FrequencyRequest(){
     }
   }
 #endif
+#endif
 //---------------------------------------------------------------------------------------------------------
-
+#if defined(DUMMY)
 void WebServer(){
   #if defined(EthModule)
     EthernetClient client = server.available();
@@ -1722,7 +1786,9 @@ void WebServer(){
     }
   #endif
 }
+#endif
 //---------------------------------------------------------------------------------------------------------
+#if defined(DUMMY)
 
 float volt(int raw, float divider) {
   // float voltage = (raw * 5.0) / 1024.0 * ResistorCoeficient;
@@ -1735,7 +1801,9 @@ float volt(int raw, float divider) {
   #endif
   return voltage;
 }
+#endif
 //-------------------------------------------------------------------------------------------------------
+#if defined(DUMMY)
 
 void DCinMeasure(){
   if (millis() - VoltageRefresh[0] > VoltageRefresh[1]){
@@ -1752,6 +1820,7 @@ void DCinMeasure(){
     VoltageRefresh[0] = millis();                      // set time mark
   }
 }
+#endif
 //---------------------------------------------------------------------------------------------------------
 
 void BandDecoderInput(){
@@ -1812,7 +1881,7 @@ void BandDecoderInput(){
     #if defined(SERIAL_echo)
         serialEcho();
         Serial.print(VOLTAGE);
-        Serial.println(" V");
+        Serial.println(F(" V"));
         Serial.flush();
     #endif
 
