@@ -6,7 +6,7 @@
   Processor: ATMEGA328P (Old Booatloader)
   --------------------
 
-  Manual_IP_switch_MK2 for Arduino rev.0.2
+  Manual_IP_switch_MK2 for Arduino
 -----------------------------------------------------------
   https://remoteqth.com/wiki/index.php?page=Band+decoder+MK2
   2019-01 by OK1HRA
@@ -38,6 +38,7 @@ Features:
 
   Changelog
   ---------
+  2019-09 - after press any button longer than 2 second, switch to search new device in network
   2019-06 - manual set remote relay IP and storage to eeprom for restore after restart
   2019-04 - group button support (idea TNX SM0MDG)
   2019-03 - redesign CLI
@@ -55,14 +56,14 @@ Features:
   - select ID by band decoder
   - encoder show ANT fullname
 */
-const char* REV = "20190605";
+const char* REV = "20190928";
 
 //=====[ Settings ]===========================================================================================
 
 #define LcdI2Caddress  0x27   // 0x27 0x3F - may be find with I2C scanner https://playground.arduino.cc/Main/I2cScanner
-#define LCD_PCF8574           // If LCD uses PCF8574 chip
+// #define LCD_PCF8574           // If LCD uses PCF8574 chip
 // #define LCD_PCF8574T          // If LCD uses PCF8574T chip
-// #define LCD_PCF8574AT         // If LCD uses PCF8574AT chip
+#define LCD_PCF8574AT         // If LCD uses PCF8574AT chip
 // #define SERIAL_debug          // Enable debuging on serial terminal, enable with send *
 // #define FastBoot              // Enable fast power up, without shown LCD information
 
@@ -246,8 +247,9 @@ long EthLinkStatusTimer[2]{1500,1000};
   //     "Dish 1m",      // Band 16
   // };
   // byte LockChar[8] = {0b00100, 0b01010, 0b01010, 0b11111, 0b11011, 0b11011, 0b11111, 0b00000};
-  uint8_t LockChar[8] = {0x4,0xa,0xa,0x1f,0x1b,0x1b,0x1f,0x0};
   // byte EthChar[8] = {0b00000, 0b00000, 0b11111, 0b10001, 0b10001, 0b11011, 0b11111, 0b00000};
+  // byte DotChar[8] = {0b00000, 0b00000, 0b00000, 0b00100, 0b00000, 0b00000, 0b00000, 0b00000};
+  uint8_t LockChar[8] = {0x4,0xa,0xa,0x1f,0x1b,0x1b,0x1f,0x0};
   uint8_t EthChar[8] = {0x0,0x0,0x1f,0x11,0x11,0x1b,0x1f,0x0};
   uint8_t DotChar[8] = {0x0,0x0,0x0,0x4,0x0,0x0,0x0,0x0};
   const byte rq[2][13] = {
@@ -255,6 +257,8 @@ long EthLinkStatusTimer[2]{1500,1000};
     {0x52, 0x65, 0x6d, 0x6f, 0x74, 0x65, 0x51, 0x54, 0x48, 0x2e, 0x63, 0x6f, 0x6d},
   };
   bool LcdNeedRefresh = false;
+  bool SetupEnable = false;
+  bool ShortLcdChangeEnable = false;
 #endif
 
 #if defined(EthModule)
@@ -325,7 +329,7 @@ const int ShiftOutLatchPin = 8;   // LATCH
 const int ShiftOutClockPin = 9;   // CLOCK
 // boolean rxShiftInRead;
 byte rxShiftInButton[3]{0,0,0};  // three button bank: 1-8 switch, 9-16 one from, encoder...
-
+boolean UseButt = 0;
 int BAND = 0;
 int previousBAND = -1;
 long freq = 0;
@@ -524,7 +528,8 @@ void loop() {
   PttOff();
   SerialCLI();
   CheckNetId(); // Live change ID/BAND
-
+  SetupOnOff();
+  
   // WebServer();
   // BandDecoderInput();
   // BandDecoderOutput();
@@ -928,13 +933,39 @@ void InterruptON(int ptt, int enc){
     detachInterrupt(digitalPinToInterrupt(EncAShiftInPin));
   }else if(enc==1){
     attachInterrupt(digitalPinToInterrupt(EncAShiftInPin), EncoderInterrupt, FALLING);  // need detachInterrupt in RX_UDP() subroutine
+    // encoder slowly with this code
+    // attachInterrupt(digitalPinToInterrupt(EncAShiftInPin), SetupOnOff2, RISING);
+  }
+}
+//---------------------------------------------------------------------------------------------------------
+
+void SetupOnOff2(){
+  if(millis()-GetNetIdTimer[0]>2000 && UseButt==1){
+    SetupEnable=!SetupEnable;
+    if(SetupEnable==false){
+      TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
+    }
+    LcdNeedRefresh=true;
+  }
+}
+//---------------------------------------------------------------------------------------------------------
+
+void SetupOnOff(){
+  if(millis()-GetNetIdTimer[0]>2000 && AccKeyboardShift()==true){
+    SetupEnable=!SetupEnable;
+    // if(SetupEnable==false){
+    //   TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
+    // }
+    ShortLcdChangeEnable=true;
+    GetNetIdTimer[0]=millis();
+    LcdNeedRefresh=true;
   }
 }
 //---------------------------------------------------------------------------------------------------------
 
 void EncoderInterrupt(){
   InterruptON(1,0); // ptt, enc
-  boolean UseButt = 0;
+  UseButt = 0;
   if(PTT==false){
     rxShiftInButton[1]=0;
     rxShiftInButton[2]=0;
@@ -942,7 +973,11 @@ void EncoderInterrupt(){
     // Encoder and buttons
     if(digitalRead(EncBPin)==0){
       if(EncoderCount<NumberOfEncoderOutputs-1){
-        EncoderCount++;
+        if(SetupEnable==true){
+          NET_ID++;
+        }else{
+          EncoderCount++;
+        }
       }else{
         EncoderCount=0;
       }
@@ -956,13 +991,30 @@ void EncoderInterrupt(){
         // Serial.println(millis());
       }else{
         if(EncoderCount>0){
-          EncoderCount--;
+          if(SetupEnable==true){
+            NET_ID--;
+          }else{
+            EncoderCount--;
+          }
         }else{
           EncoderCount=NumberOfEncoderOutputs-1;
         }
         EncEndStatus=1;
         EncEndTimer[0]=millis();
       }
+    }
+    if(NET_ID!=TxUdpBuffer[0]){
+      TxUdpBuffer[0] = NET_ID;
+      // EEPROM.write(1, NET_ID); // address, value -------------- Save y/n ????
+      // EEPROM.commit();
+      Serial.print(F("** Now NET-ID change to 0x"));
+      if(NET_ID <=0x0f){
+        Serial.print(F("0"));
+      }
+      Serial.print(NET_ID, HEX);
+      Serial.println(F(" **"));
+      TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
+      delay(500);
     }
 
     // Over/under count
@@ -972,7 +1024,7 @@ void EncoderInterrupt(){
       rxShiftInButton[2]=rxShiftInButton[2] | (1<<EncoderCount-8);
     }
 
-    if( (millis()-ButtDebounceTimer[0]>ButtDebounceTimer[1] && UseButt==1) || UseButt==0 ){
+    if( ( (millis()-ButtDebounceTimer[0]>ButtDebounceTimer[1] && UseButt==1) || UseButt==0 ) && SetupEnable==false ){
       TxUDP(ThisDevice, RemoteDevice, rxShiftInButton[0], rxShiftInButton[1], rxShiftInButton[2]);
       if(UseButt==1){
         ButtDebounceTimer[0]=millis();
@@ -1064,52 +1116,59 @@ void LcdDisplay(){
             lcd.backlight();
           #endif
         }else{
-          int LcdSpace = (16-NumberOfEncoderOutputs)/2;
-          int PositionCounter = 0;
-          lcd.setCursor(0,0);
-          for (int i=0; i<LcdSpace; i++){
-            lcd.print(F(" "));
-            PositionCounter++;
-          }
-          // Encoder
-          if( (EncoderCount+1) > (NumberOfEncoderOutputs-1) ){
-            EncoderCount = NumberOfEncoderOutputs-1;
-          }
-          for (int i=0; i<NumberOfEncoderOutputs; i++){
-            lcd.setCursor(i+LcdSpace,0);
-            if(i==EncoderCount){
-              if(EncoderCount>8){
-                lcd.setCursor(i-1+LcdSpace,0);
-                lcd.print(EncoderCount+1, DEC);
+          if(SetupEnable==false){
+            int LcdSpace = (16-NumberOfEncoderOutputs)/2;
+            int PositionCounter = 0;
+            lcd.setCursor(0,0);
+            for (int i=0; i<LcdSpace; i++){
+              lcd.print(F(" "));
+              PositionCounter++;
+            }
+            // Encoder
+            if( (EncoderCount+1) > (NumberOfEncoderOutputs-1) ){
+              EncoderCount = NumberOfEncoderOutputs-1;
+            }
+            for (int i=0; i<NumberOfEncoderOutputs; i++){
+              lcd.setCursor(i+LcdSpace,0);
+              if(i==EncoderCount){
+                if(EncoderCount>8){
+                  lcd.setCursor(i-1+LcdSpace,0);
+                  lcd.print(EncoderCount+1, DEC);
+                }else{
+                  lcd.print(EncoderCount+1, DEC);
+                }
               }else{
-                lcd.print(EncoderCount+1, DEC);
+                // lcd.print(".");
+                lcd.print((char)2);
               }
-            }else{
-              // lcd.print(".");
-              lcd.print((char)2);
+              PositionCounter++;
             }
-            PositionCounter++;
-          }
-          for (int i=PositionCounter; i<16; i++){
-            lcd.print(F(" "));
-          }
-          // Keyboard
-          for (int i=0; i<8; i++){
-            lcd.setCursor(i,1);
-            if (rxShiftInButton[0] & (1<<i)) {
-              lcd.print(i+1);
-            }else{
-              lcd.print(' ');
+            for (int i=PositionCounter; i<16; i++){
+              lcd.print(F(" "));
             }
-          }
+            // Keyboard
+            for (int i=0; i<8; i++){
+              lcd.setCursor(i,1);
+              if (rxShiftInButton[0] & (1<<i)) {
+                lcd.print(i+1);
+              }else{
+                lcd.print(' ');
+              }
+            }
 
-          lcd.setCursor(8,1);
-          // PTT
-          if(PTT==true){
-            // lcd.write(byte(0));        // Lock icon
-            lcd.print((char)0);
-          }else{
-            lcd.print(F("|"));
+            lcd.setCursor(8,1);
+            // PTT
+            if(PTT==true){
+              // lcd.write(byte(0));        // Lock icon
+              lcd.print((char)0);
+            }else{
+              lcd.print(F("|"));
+            }
+          }else{  // SETUP
+            lcd.setCursor(0,0);
+            lcd.print("Search ID in net");
+            lcd.setCursor(0,1);
+            lcd.print("select > ");
           }
         }
 
@@ -1141,7 +1200,7 @@ void LcdDisplay(){
         lcd.print(F(" Please connect"));
         lcd.setCursor(0, 1);
         lcd.print(F("  ethernet      "));
-      }else{
+      }else if(SetupEnable==false){
         lcd.setCursor(0, 0);
         lcd.print(F(" IPswitch-ID: "));
         if(NET_ID < 0x0f){
@@ -1349,6 +1408,7 @@ void RX_UDP(char FROM, char TO){
         if((packetBuffer[4]== 'b' && packetBuffer[5]== 'r') // && packetBuffer[6]== 'o')
           || (packetBuffer[4]== 'c' && packetBuffer[5]== 'f') // && packetBuffer[6]== 'm')
           ){
+          SetupEnable=false;
           NumberOfEncoderOutputs = String(packetBuffer[6], DEC).toInt()+1;
           IPAddress TmpAddr = UdpCommand.remoteIP();
           DetectedRemoteSw [hexToDecBy4bit(IdSufix(NET_ID))] [0]=TmpAddr[0];     // Switch IP addres storage to array
@@ -1384,7 +1444,11 @@ void RX_UDP(char FROM, char TO){
           lcd.print(DetectedRemoteSw [hexToDecBy4bit(IdSufix(NET_ID))] [4]);
           // lcd.print(DetectedRemoteSw [hexToDecBy4bit(packetBuffer[0])] [4]);
           #if !defined(FastBoot)
-            delay(4000);
+            if(ShortLcdChangeEnable==true){
+              delay(500);
+            }else{
+              delay(4000);
+            }
           #endif
           lcd.clear();
           lcd.setCursor(0, 0);
@@ -1392,7 +1456,12 @@ void RX_UDP(char FROM, char TO){
           lcd.setCursor(7, 1);
           lcd.print(NumberOfEncoderOutputs);
           #if !defined(FastBoot)
+          if(ShortLcdChangeEnable==true){
+            delay(500);
+            ShortLcdChangeEnable=false;
+          }else{
             delay(1500);
+          }
           #endif
           LcdNeedRefresh = true;
           lcd.clear();
