@@ -38,7 +38,8 @@ Features:
 
   Changelog
   ---------
-  2019-09 - after press any button longer than 2 second, switch to search new device in network
+  2020-09 - fix enter number in CLI
+  2019-09 - after press any button longer than 5 second, switch to search new device in network
   2019-06 - manual set remote relay IP and storage to eeprom for restore after restart
   2019-04 - group button support (idea TNX SM0MDG)
   2019-03 - redesign CLI
@@ -56,7 +57,7 @@ Features:
   - select ID by band decoder
   - encoder show ANT fullname
 */
-const char* REV = "20190928";
+const char* REV = "20200919";
 
 //=====[ Settings ]===========================================================================================
 
@@ -68,15 +69,14 @@ const char* REV = "20190928";
 // #define FastBoot              // Enable fast power up, without shown LCD information
 
 // You can set remote relay IP address, from outside local network
-byte DetectedRemoteSw[16][5];
-// {
+byte DetectedRemoteSw[16][5]; // = {
 //   {0,0,0,0, 0},   // IP:port ID 0
 //   {0,0,0,0, 0},   // IP:port ID 1
 //   {0,0,0,0, 0},   // IP:port ID 2
 //   {0,0,0,0, 0},   // IP:port ID 3
 //   {0,0,0,0, 0},   // IP:port ID 4
 //   {0,0,0,0, 0},   // IP:port ID 5
-//   {0,0,0,0, 0},   // IP:port ID 6
+//   {10,51,100,74, 88},   // IP:port ID 6
 //   {78,111,124,210, 88},   // IP:port ID 7 - remoteqth test point
 //   {0,0,0,0, 0},   // IP:port ID 8
 //   {0,0,0,0, 0},   // IP:port ID 9
@@ -109,6 +109,7 @@ byte DetectedRemoteSw[16][5];
 // #define YAESU_CAT_OUT      // send frequency to RS232 CAT ** for operation must disable REQUEST **
 
 #define LCD                   // Uncoment to Enable I2C LCD
+byte InputByte[21];
 bool PttTransfer = 0;
 byte ButtonUseForPttTransfer= 8;  // 1-8
 bool HW_BCD_SW = 0;              // enable hardware ID board bcd switch (disable if not installed)
@@ -529,7 +530,7 @@ void loop() {
   SerialCLI();
   CheckNetId(); // Live change ID/BAND
   SetupOnOff();
-  
+
   // WebServer();
   // BandDecoderInput();
   // BandDecoderOutput();
@@ -680,22 +681,28 @@ void SerialCLI(){
 
           // @
         }else if(incomingByte==64){
+          Serial.println(F("enter IP address by four number (0-255) and press [;] after each"));
           for (int i=0; i<5; i++){
               if(i<4){
-                Serial.print(F("Press number (0-255) for part "));
-                Serial.print(i+1);
-                Serial.println(F(" and wait"));
+                // Serial.print(i+1);
+                // Serial.println(F(" (0-255) and [enter]"));
               }else{
-                Serial.println(F("Press IP port (1-65535) and wait"));
+                Serial.println(F("enter IP port (1-65535) and press [;]"));
               }
-              Serial.print(F("> "));
-              while(!Serial.available()) {
+              Enter();
+              int intBuf=0;
+              int mult=1;
+              for (int i=InputByte[0]; i>0; i--){
+                intBuf = intBuf + ((InputByte[i]-48)*mult);
+                mult = mult*10;
               }
-              delay(1000);
-                int CompareInt = Serial.parseInt();
-                if( (i<4 && CompareInt>=0 && CompareInt<=255) || (i==4 && CompareInt>=1 && CompareInt<=65535) ){
-                  Serial.println(CompareInt);
-                  DetectedRemoteSw[IdSufix(NET_ID)][i] = CompareInt;
+              // while(!Serial.available()) {
+              // }
+              // delay(1000);
+                // int CompareInt = Serial.parseInt();
+                if( (i<4 && intBuf>=0 && intBuf<=255) || (i==4 && intBuf>=1 && intBuf<=65535) ){
+                  // Serial.println(intBuf);
+                  DetectedRemoteSw[IdSufix(NET_ID)][i] = intBuf;
                   if(i==4){
                     for (int j=0; j<5; j++) {
                       EEPROM.write(IdSufix(NET_ID)*5+j+4, DetectedRemoteSw[IdSufix(NET_ID)][j]);
@@ -820,6 +827,32 @@ void SerialCLI(){
           }
   }
 }
+//-------------------------------------------------------------------------------------------------------
+void Enter(){
+  InputByte[0]=0;
+  incomingByte = 0;
+  bool br=false;
+  Serial.print("> ");
+
+  while(br==false) {
+    if(Serial.available()){
+      incomingByte=Serial.read();
+      if(incomingByte==59){
+        br=true;
+        Serial.println("");
+      }else{
+        Serial.write(incomingByte);
+        InputByte[InputByte[0]+1]=incomingByte;
+        InputByte[0]++;
+      }
+      if(InputByte[0]==20){
+        br=true;
+        Serial.print(" too long");
+      }
+    }
+  }
+
+}
 //---------------------------------------------------------------------------------------------------------
 void ListCommands(){
   Serial.println();
@@ -940,7 +973,7 @@ void InterruptON(int ptt, int enc){
 //---------------------------------------------------------------------------------------------------------
 
 void SetupOnOff2(){
-  if(millis()-GetNetIdTimer[0]>2000 && UseButt==1){
+  if(millis()-GetNetIdTimer[0]>5000 && UseButt==1){
     SetupEnable=!SetupEnable;
     if(SetupEnable==false){
       TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
@@ -951,7 +984,7 @@ void SetupOnOff2(){
 //---------------------------------------------------------------------------------------------------------
 
 void SetupOnOff(){
-  if(millis()-GetNetIdTimer[0]>2000 && AccKeyboardShift()==true){
+  if(millis()-GetNetIdTimer[0]>5000 && AccKeyboardShift()==true){
     SetupEnable=!SetupEnable;
     // if(SetupEnable==false){
     //   TxUDP(ThisDevice, RemoteDevice, 'b', 'r', 'o');
